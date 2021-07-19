@@ -5,6 +5,8 @@ date: 2021-06-19T19:38:21+08:00
 
 {{ page.date | date_to_string }}
 
+[App Manual](manual)
+
 ## Abstract
 
 The initial synchronization of a wallet with the Zcash blockchain is one of the most often mentioned issues with light clients.

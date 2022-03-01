@@ -3,19 +3,20 @@ use crate::contact::Contact;
 use crate::prices::Quote;
 use crate::taddr::derive_tkeys;
 use crate::transaction::TransactionInfo;
-use crate::{CTree, Witness, NETWORK};
+use crate::{CTree, Witness};
 use chrono::NaiveDateTime;
 use rusqlite::{params, Connection, OptionalExtension, Transaction, NO_PARAMS};
 use std::collections::HashMap;
 use bech32::FromBase32;
 use zcash_client_backend::encoding::decode_extended_full_viewing_key;
-use zcash_primitives::consensus::{NetworkUpgrade, Parameters};
+use zcash_primitives::consensus::{Network, NetworkUpgrade, Parameters};
 use zcash_primitives::merkle_tree::IncrementalWitness;
 use zcash_primitives::sapling::{Diversifier, Node, Note, Rseed, SaplingIvk};
 use zcash_primitives::zip32::{DiversifierIndex, ExtendedFullViewingKey};
 use serde::{Serialize, Deserialize};
 use chacha20poly1305::{Key, ChaCha20Poly1305, Nonce};
 use chacha20poly1305::aead::{Aead, NewAead};
+use zcash_params::coin::{CoinType, get_coin_chain};
 
 mod migration;
 
@@ -23,6 +24,7 @@ mod migration;
 pub const DEFAULT_DB_PATH: &str = "zec.db";
 
 pub struct DbAdapter {
+    pub coin_type: CoinType,
     pub connection: Connection,
 }
 
@@ -73,10 +75,10 @@ pub struct AccountBackup {
 }
 
 impl DbAdapter {
-    pub fn new(db_path: &str) -> anyhow::Result<DbAdapter> {
+    pub fn new(coin_type: CoinType, db_path: &str) -> anyhow::Result<DbAdapter> {
         let connection = Connection::open(db_path)?;
         connection.execute("PRAGMA synchronous = off", NO_PARAMS)?;
-        Ok(DbAdapter { connection })
+        Ok(DbAdapter { coin_type, connection })
     }
 
     pub fn begin_transaction(&mut self) -> anyhow::Result<Transaction> {
@@ -135,7 +137,7 @@ impl DbAdapter {
             let ivk: String = row.get(1)?;
             let sk: Option<String> = row.get(2)?;
             let fvk = decode_extended_full_viewing_key(
-                NETWORK.hrp_sapling_extended_full_viewing_key(),
+                self.network().hrp_sapling_extended_full_viewing_key(),
                 &ivk,
             )
             .unwrap()
@@ -327,7 +329,7 @@ impl DbAdapter {
 
     pub fn get_db_height(&self) -> anyhow::Result<u32> {
         let height: u32 = self.get_last_sync_height()?.unwrap_or_else(|| {
-            crate::NETWORK
+            self.network()
                 .activation_height(NetworkUpgrade::Sapling)
                 .unwrap()
                 .into()
@@ -696,8 +698,8 @@ impl DbAdapter {
     pub fn create_taddr(&self, account: u32) -> anyhow::Result<()> {
         let seed = self.get_seed(account)?;
         if let Some(seed) = seed {
-            let bip44_path = format!("m/44'/{}'/0'/0/0", NETWORK.coin_type());
-            let (sk, address) = derive_tkeys(&seed, &bip44_path)?;
+            let bip44_path = format!("m/44'/{}'/0'/0/0", self.network().coin_type());
+            let (sk, address) = derive_tkeys(self.network(), &seed, &bip44_path)?;
             self.connection.execute(
                 "INSERT INTO taddrs(account, sk, address) VALUES (?1, ?2, ?3) \
             ON CONFLICT DO NOTHING",
@@ -898,17 +900,23 @@ impl DbAdapter {
 
         Ok(())
     }
+
+    fn network(&self) -> &'static Network {
+        let chain = get_coin_chain(self.coin_type);
+        chain.network()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use bech32::{ToBase32, Variant};
+    use zcash_params::coin::CoinType;
     use crate::db::{DbAdapter, ReceivedNote, DEFAULT_DB_PATH};
     use crate::{CTree, Witness};
 
     #[test]
     fn test_db_backup() {
-        let db = DbAdapter::new(DEFAULT_DB_PATH).unwrap();
+        let db = DbAdapter::new(CoinType::Zcash, DEFAULT_DB_PATH).unwrap();
         let k = [0u8; 32];
         let k = bech32::encode("zwk", k.to_base32(), Variant::Bech32).unwrap();
         let b = db.get_full_backup(&k).unwrap();
@@ -919,7 +927,7 @@ mod tests {
 
     #[test]
     fn test_db() {
-        let mut db = DbAdapter::new(DEFAULT_DB_PATH).unwrap();
+        let mut db = DbAdapter::new(CoinType::Zcash, DEFAULT_DB_PATH).unwrap();
         db.init_db().unwrap();
         db.trim_to_height(0).unwrap();
 
@@ -956,7 +964,7 @@ mod tests {
 
     #[test]
     fn test_balance() {
-        let db = DbAdapter::new(DEFAULT_DB_PATH).unwrap();
+        let db = DbAdapter::new(CoinType::Zcash, DEFAULT_DB_PATH).unwrap();
         let balance = db.get_balance(1).unwrap();
         println!("{}", balance);
     }

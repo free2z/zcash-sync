@@ -3,7 +3,7 @@
 #[path = "generated/cash.z.wallet.sdk.rpc.rs"]
 pub mod lw_rpc;
 
-pub use zcash_params::coin::{get_branch, NETWORK, TICKER};
+pub use zcash_params::coin::{CoinType, get_coin_type, get_branch};
 
 // Mainnet
 // pub const LWD_URL: &str = "https://mainnet.lightwalletd.com:9067";
@@ -50,7 +50,7 @@ pub use crate::chain::{
 pub use crate::commitment::{CTree, Witness};
 pub use crate::db::DbAdapter;
 pub use crate::hash::pedersen_hash;
-pub use crate::key::{decode_key, is_valid_key, generate_random_enc_key};
+pub use crate::key::{KeyHelpers, generate_random_enc_key};
 pub use crate::lw_rpc::compact_tx_streamer_client::CompactTxStreamerClient;
 pub use crate::lw_rpc::*;
 pub use crate::mempool::MemPool;

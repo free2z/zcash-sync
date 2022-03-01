@@ -1,15 +1,19 @@
 use clap::{App, Arg};
 use std::fs::File;
 use std::io::{Read, Write};
-use sync::{decode_key, Tx, NETWORK};
+use sync::{KeyHelpers, Tx};
 use zcash_client_backend::encoding::decode_extended_spending_key;
-use zcash_primitives::consensus::Parameters;
+use zcash_primitives::consensus::{Network, Parameters};
 use zcash_proofs::prover::LocalTxProver;
+use zcash_params::coin::CoinType;
+
+const NETWORK: Network = Network::MainNetwork; // TODO
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let key = dotenv::var("KEY").unwrap();
-    let (_seed, sk, _ivk, _address) = decode_key(&key)?;
+    let kh = KeyHelpers::new(CoinType::Zcash);
+    let (_seed, sk, _ivk, _address) = kh.decode_key(&key)?;
 
     let matches = App::new("Multisig CLI")
         .version("1.0")

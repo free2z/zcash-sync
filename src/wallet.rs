@@ -94,7 +94,7 @@ impl From<&Recipient> for RecipientMemo {
 }
 
 impl Wallet {
-    pub fn new(coin_type: CoinType, db_path: &str, ld_url: &str) -> Wallet {
+    pub fn new(coin_type: CoinType, db_path: &str) -> Wallet {
         let db = DbAdapter::new(coin_type, db_path).unwrap();
         let key_helpers = KeyHelpers::new(coin_type);
         db.init_db().unwrap();
@@ -104,7 +104,7 @@ impl Wallet {
             db,
             key_helpers,
             prover: AtomicLazyCell::new(),
-            ld_url: ld_url.to_string(),
+            ld_url: "".to_string(),
         }
     }
 
@@ -596,7 +596,8 @@ mod tests {
         env_logger::init();
 
         let seed = dotenv::var("SEED").unwrap();
-        let wallet = Wallet::new(CoinType::Zcash, "zec.db", LWD_URL);
+        let mut wallet = Wallet::new(CoinType::Zcash, "zec.db");
+        wallet.set_lwd_url(LWD_URL).unwrap();
         wallet.new_account_with_key("test", &seed).unwrap();
     }
 
@@ -618,7 +619,8 @@ mod tests {
 
     #[test]
     pub fn test_diversified_address() {
-        let wallet = Wallet::new(CoinType::Zcash, "zec.db", LWD_URL);
+        let mut wallet = Wallet::new(CoinType::Zcash, "zec.db");
+        wallet.set_lwd_url(LWD_URL).unwrap();
         let address = wallet.new_diversified_address(1).unwrap();
         println!("{}", address);
     }

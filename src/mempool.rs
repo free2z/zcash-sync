@@ -33,7 +33,7 @@ pub struct MemPool {
 }
 
 impl MemPool {
-    pub fn new(coin_type: CoinType, db_path: &str, ld_url: &str) -> MemPool {
+    pub fn new(coin_type: CoinType, db_path: &str) -> MemPool {
         MemPool {
             coin_type,
             db_path: db_path.to_string(),
@@ -43,7 +43,7 @@ impl MemPool {
             transactions: HashMap::new(),
             nfs: HashMap::new(),
             balance: 0,
-            ld_url: ld_url.to_string(),
+            ld_url: "".to_string(),
         }
     }
 
@@ -153,6 +153,11 @@ impl MemPool {
         balance
     }
 
+    pub fn set_lwd_url(&mut self, ld_url: &str) -> anyhow::Result<()> {
+        self.ld_url = ld_url.to_string();
+        Ok(())
+    }
+
     fn chain(&self) -> &dyn CoinChain { get_coin_chain(self.coin_type) }
 }
 
@@ -168,7 +173,8 @@ mod tests {
     async fn test_mempool() {
         let db = DbAdapter::new(CoinType::Zcash, DEFAULT_DB_PATH).unwrap();
         let ivk = db.get_ivk(1).unwrap();
-        let mut mempool = MemPool::new(CoinType::Zcash, "zec.db", LWD_URL);
+        let mut mempool = MemPool::new(CoinType::Zcash, "zec.db");
+        mempool.set_lwd_url(LWD_URL).unwrap();
         mempool.set_ivk(&ivk);
         loop {
             mempool.scan().await.unwrap();

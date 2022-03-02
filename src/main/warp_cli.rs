@@ -32,7 +32,8 @@ async fn test() -> anyhow::Result<()> {
     let progress = |height| {
         log::info!("Height = {}", height);
     };
-    let mut wallet = Wallet::new(CoinType::Zcash, DB_NAME, LWD_URL);
+    let mut wallet = Wallet::new(CoinType::Zcash, DB_NAME);
+    wallet.set_lwd_url(LWD_URL).unwrap();
     wallet.new_account_with_key("main", &seed).unwrap();
     // wallet.new_account_with_key("test", &seed2).unwrap();
     // wallet.new_account_with_key("zecpages", &ivk).unwrap();
@@ -95,7 +96,8 @@ async fn test_sync() {
         log::info!("Height = {}", height);
     };
 
-    let wallet = Wallet::new(CoinType::Zcash, DB_NAME, LWD_URL);
+    let mut wallet = Wallet::new(CoinType::Zcash, DB_NAME);
+    wallet.set_lwd_url(LWD_URL).unwrap();
     wallet.sync(true, ANCHOR_OFFSET, progress).await.unwrap();
 }
 

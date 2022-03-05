@@ -7,16 +7,16 @@ use zcash_primitives::consensus::{Network, Parameters};
 use zcash_proofs::prover::LocalTxProver;
 use zcash_params::coin::CoinType;
 
-const NETWORK: Network = Network::MainNetwork; // TODO
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let key = dotenv::var("KEY").unwrap();
-    let kh = KeyHelpers::new(CoinType::Zcash);
-    let (_seed, sk, _ivk, _address) = kh.decode_key(&key)?;
-
-    let matches = App::new("Multisig CLI")
+    let matches = App::new("Cold wallet Signer CLI")
         .version("1.0")
+        .arg(
+            Arg::with_name("coin")
+                .short("coin")
+                .long("coin")
+                .takes_value(true),
+        )
         .arg(
             Arg::with_name("tx_filename")
                 .short("tx")
@@ -31,12 +31,22 @@ async fn main() -> anyhow::Result<()> {
         )
         .get_matches();
 
-    let tx_filename = matches.value_of("tx_filename").unwrap();
-    let out_filename = matches.value_of("out_filename").unwrap();
+    let coin = matches.value_of("coin").expect("coin argument missing");
+    let tx_filename = matches.value_of("tx_filename").expect("input filename missing");
+    let out_filename = matches.value_of("out_filename").expect("output filename missing");
+
+    let (coin_type, network) = match coin {
+        "zcash" => (CoinType::Zcash, Network::MainNetwork),
+        "ycash" => (CoinType::Ycash, Network::YCashMainNetwork),
+        _ => panic!("Invalid coin")
+    };
+    let key = dotenv::var("KEY").unwrap();
+    let kh = KeyHelpers::new(coin_type);
+    let (_seed, sk, _ivk, _address) = kh.decode_key(&key)?;
 
     let sk = sk.unwrap();
     let sk =
-        decode_extended_spending_key(NETWORK.hrp_sapling_extended_spending_key(), &sk)?.unwrap();
+        decode_extended_spending_key(network.hrp_sapling_extended_spending_key(), &sk)?.unwrap();
 
     let mut file = File::open(tx_filename)?;
     let mut s = String::new();

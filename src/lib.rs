@@ -58,4 +58,4 @@ pub use crate::pay::{broadcast_tx, Tx, TxIn, TxOut};
 pub use crate::print::*;
 pub use crate::scan::{latest_height, scan_all, sync_async};
 pub use crate::ua::{get_sapling, get_ua};
-pub use crate::wallet::{RecipientMemo, Wallet, WalletBalance};
+pub use crate::wallet::{RecipientMemo, Wallet, WalletBalance, encrypt_backup, decrypt_backup};

@@ -7,16 +7,13 @@ use crate::{CTree, Witness};
 use chrono::NaiveDateTime;
 use rusqlite::{params, Connection, OptionalExtension, Transaction, NO_PARAMS};
 use std::collections::HashMap;
-use bech32::FromBase32;
 use zcash_client_backend::encoding::decode_extended_full_viewing_key;
 use zcash_primitives::consensus::{Network, NetworkUpgrade, Parameters};
 use zcash_primitives::merkle_tree::IncrementalWitness;
 use zcash_primitives::sapling::{Diversifier, Node, Note, Rseed, SaplingIvk};
 use zcash_primitives::zip32::{DiversifierIndex, ExtendedFullViewingKey};
 use serde::{Serialize, Deserialize};
-use chacha20poly1305::{Key, ChaCha20Poly1305, Nonce};
-use chacha20poly1305::aead::{Aead, NewAead};
-use zcash_params::coin::{CoinType, get_coin_chain};
+use zcash_params::coin::{CoinType, get_coin_chain, get_coin_id};
 
 mod migration;
 
@@ -65,8 +62,10 @@ impl AccountViewKey {
 
 #[derive(Serialize, Deserialize)]
 pub struct AccountBackup {
+    pub coin: u8,
     pub name: String,
     pub seed: Option<String>,
+    pub index: u32,
     pub z_sk: Option<String>,
     pub ivk: String,
     pub z_addr: String,
@@ -832,22 +831,24 @@ impl DbAdapter {
         Ok(())
     }
 
-    const NONCE: &'static[u8; 12] = b"unique nonce";
-
-    pub fn get_full_backup(&self, key: &str) -> anyhow::Result<String> {
+    pub fn get_full_backup(&self) -> anyhow::Result<Vec<AccountBackup>> {
+        let coin = get_coin_id(self.coin_type);
         let mut statement = self.connection.prepare(
-            "SELECT name, seed, a.sk AS z_sk, ivk, a.address AS z_addr, t.sk as t_sk, t.address AS t_addr FROM accounts a LEFT JOIN taddrs t ON a.id_account = t.account")?;
+            "SELECT name, seed, aindex, a.sk AS z_sk, ivk, a.address AS z_addr, t.sk as t_sk, t.address AS t_addr FROM accounts a LEFT JOIN taddrs t ON a.id_account = t.account")?;
         let rows = statement.query_map(NO_PARAMS, |r| {
             let name: String = r.get(0)?;
             let seed: Option<String> = r.get(1)?;
-            let z_sk: Option<String> = r.get(2)?;
-            let ivk: String = r.get(3)?;
-            let z_addr: String = r.get(4)?;
-            let t_sk: Option<String> = r.get(5)?;
-            let t_addr: Option<String> = r.get(6)?;
+            let index: u32 = r.get(2)?;
+            let z_sk: Option<String> = r.get(3)?;
+            let ivk: String = r.get(4)?;
+            let z_addr: String = r.get(5)?;
+            let t_sk: Option<String> = r.get(6)?;
+            let t_addr: Option<String> = r.get(7)?;
             Ok(AccountBackup {
+                coin,
                 name,
                 seed,
+                index,
                 z_sk,
                 ivk,
                 z_addr,
@@ -859,44 +860,28 @@ impl DbAdapter {
         for r in rows {
             accounts.push(r?);
         }
-        let accounts_bin = bincode::serialize(&accounts)?;
-
-        let (hrp, key, _) = bech32::decode(key)?;
-        if hrp != "zwk" { anyhow::bail!("Invalid backup key") }
-        let key = Vec::<u8>::from_base32(&key)?;
-        let key = Key::from_slice(&key);
-
-        let cipher = ChaCha20Poly1305::new(key);
-        // nonce is constant because we always use a different key!
-        let cipher_text = cipher.encrypt(Nonce::from_slice(Self::NONCE), &*accounts_bin).map_err(|_e| anyhow::anyhow!("Failed to encrypt backup"))?;
-        let backup = base64::encode(cipher_text);
-        Ok(backup)
+        Ok(accounts)
     }
 
-    pub fn restore_full_backup(&self, key: &str, backup: &str) -> anyhow::Result<()> {
-        let (hrp, key, _) = bech32::decode(key)?;
-        if hrp != "zwk" { anyhow::bail!("Not a valid decryption key"); }
-        let key = Vec::<u8>::from_base32(&key)?;
-        let key = Key::from_slice(&key);
-
-        let cipher = ChaCha20Poly1305::new(key);
-        let backup = base64::decode(backup)?;
-        let backup = cipher.decrypt(Nonce::from_slice(Self::NONCE), &*backup).map_err(|_e| anyhow::anyhow!("Failed to decrypt backup"))?;
-
-        let accounts: Vec<AccountBackup> = bincode::deserialize(&backup)?;
+    pub fn restore_full_backup(&self, accounts: &[AccountBackup]) -> anyhow::Result<()> {
+        let coin = get_coin_id(self.coin_type);
         for a in accounts {
-            log::info!("{}", a.name);
-            let do_insert = || {
-                self.connection.execute("INSERT INTO accounts(name, seed, sk, ivk, address) VALUES (?1,?2,?3,?4,?5)",
-                                        params![a.name, a.seed, a.z_sk, a.ivk, a.z_addr])?;
-                let id_account = self.connection.last_insert_rowid() as u32;
-                if let Some(t_addr) = a.t_addr {
-                    self.connection.execute("INSERT INTO taddrs(account, sk, address) VALUES (?1,?2,?3)",
-                                            params![id_account, a.t_sk, t_addr])?;
+            log::info!("{} {} {}", a.name, a.coin, coin);
+            if a.coin == coin {
+                let do_insert = || {
+                    self.connection.execute("INSERT INTO accounts(name, seed, aindex, sk, ivk, address) VALUES (?1,?2,?3,?4,?5,?6)",
+                                            params![a.name, a.seed, a.index, a.z_sk, a.ivk, a.z_addr])?;
+                    let id_account = self.connection.last_insert_rowid() as u32;
+                    if let Some(t_addr) = &a.t_addr {
+                        self.connection.execute("INSERT INTO taddrs(account, sk, address) VALUES (?1,?2,?3)",
+                                                params![id_account, a.t_sk, t_addr])?;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                };
+                if let Err(e) = do_insert() {
+                    log::info!("{:?}", e);
                 }
-                Ok::<_, anyhow::Error>(())
-            };
-            let _ = do_insert();
+            }
         }
 
         Ok(())
@@ -910,21 +895,9 @@ impl DbAdapter {
 
 #[cfg(test)]
 mod tests {
-    use bech32::{ToBase32, Variant};
     use zcash_params::coin::CoinType;
     use crate::db::{DbAdapter, ReceivedNote, DEFAULT_DB_PATH};
     use crate::{CTree, Witness};
-
-    #[test]
-    fn test_db_backup() {
-        let db = DbAdapter::new(CoinType::Zcash, DEFAULT_DB_PATH).unwrap();
-        let k = [0u8; 32];
-        let k = bech32::encode("zwk", k.to_base32(), Variant::Bech32).unwrap();
-        let b = db.get_full_backup(&k).unwrap();
-        println!("{} {}", k, b);
-
-        db.restore_full_backup(&k, &b).unwrap();
-    }
 
     #[test]
     fn test_db() {

@@ -19,6 +19,9 @@ use serde::Serialize;
 use std::convert::TryFrom;
 use std::str::FromStr;
 use std::sync::Arc;
+use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
+use chacha20poly1305::aead::{Aead, NewAead};
+use bech32::FromBase32;
 use tokio::sync::Mutex;
 use tonic::Request;
 use zcash_client_backend::address::RecipientAddress;
@@ -33,6 +36,7 @@ use zcash_primitives::transaction::builder::Progress;
 use zcash_primitives::transaction::components::Amount;
 use zcash_proofs::prover::LocalTxProver;
 use zcash_params::coin::{CoinChain, CoinType, get_coin_chain};
+use crate::db::AccountBackup;
 
 const DEFAULT_CHUNK_SIZE: u32 = 100_000;
 
@@ -543,12 +547,12 @@ impl Wallet {
         Ok(payment_json)
     }
 
-    pub fn get_full_backup(&self, key: &str) -> anyhow::Result<String> {
-        self.db.get_full_backup(key)
+    pub fn get_full_backup(&self) -> anyhow::Result<Vec<AccountBackup>> {
+        self.db.get_full_backup()
     }
 
-    pub fn restore_full_backup(&self, key: &str, backup: &str) -> anyhow::Result<()> {
-        self.db.restore_full_backup(key, backup)
+    pub fn restore_full_backup(&self, accounts: &[AccountBackup]) -> anyhow::Result<()> {
+        self.db.restore_full_backup(accounts)
     }
 
     pub fn store_share_secret(&self, account: u32, secret: &str, index: usize, threshold: usize, participants: usize) -> anyhow::Result<()> {
@@ -573,6 +577,37 @@ impl Wallet {
 
     fn chain(&self) -> &dyn CoinChain { get_coin_chain(self.coin_type) }
     fn network(&self) -> &Network { self.chain().network() }
+}
+
+const NONCE: &'static[u8; 12] = b"unique nonce";
+
+pub fn encrypt_backup(accounts: &[AccountBackup], key: &str) -> anyhow::Result<String> {
+    let accounts_bin = bincode::serialize(&accounts)?;
+
+    let (hrp, key, _) = bech32::decode(key)?;
+    if hrp != "zwk" { anyhow::bail!("Invalid backup key") }
+    let key = Vec::<u8>::from_base32(&key)?;
+    let key = Key::from_slice(&key);
+
+    let cipher = ChaCha20Poly1305::new(key);
+    // nonce is constant because we always use a different key!
+    let cipher_text = cipher.encrypt(Nonce::from_slice(NONCE), &*accounts_bin).map_err(|_e| anyhow::anyhow!("Failed to encrypt backup"))?;
+    let backup = base64::encode(cipher_text);
+    Ok(backup)
+}
+
+pub fn decrypt_backup(key: &str, backup: &str) -> anyhow::Result<Vec<AccountBackup>> {
+    let (hrp, key, _) = bech32::decode(key)?;
+    if hrp != "zwk" { anyhow::bail!("Not a valid decryption key"); }
+    let key = Vec::<u8>::from_base32(&key)?;
+    let key = Key::from_slice(&key);
+
+    let cipher = ChaCha20Poly1305::new(key);
+    let backup = base64::decode(backup)?;
+    let backup = cipher.decrypt(Nonce::from_slice(NONCE), &*backup).map_err(|_e| anyhow::anyhow!("Failed to decrypt backup"))?;
+
+    let accounts: Vec<AccountBackup> = bincode::deserialize(&backup)?;
+    Ok(accounts)
 }
 
 #[derive(Serialize)]

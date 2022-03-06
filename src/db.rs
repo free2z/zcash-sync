@@ -105,6 +105,7 @@ impl DbAdapter {
         &self,
         name: &str,
         seed: Option<&str>,
+        index: u32,
         sk: Option<&str>,
         ivk: &str,
         address: &str,
@@ -116,9 +117,9 @@ impl DbAdapter {
             return Ok(-1);
         }
         self.connection.execute(
-            "INSERT INTO accounts(name, seed, sk, ivk, address) VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO accounts(name, seed, aindex, sk, ivk, address) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
             ON CONFLICT DO NOTHING",
-            params![name, seed, sk, ivk, address],
+            params![name, seed, index, sk, ivk, address],
         )?;
         let id_tx: i32 = self.connection.query_row(
             "SELECT id_account FROM accounts WHERE ivk = ?1",

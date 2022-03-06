@@ -24,10 +24,10 @@ impl KeyHelpers {
 
     fn chain(&self) -> &dyn CoinChain { get_coin_chain(self.coin_type) }
 
-    pub fn decode_key(&self, key: &str) -> anyhow::Result<(Option<String>, Option<String>, String, String)> {
+    pub fn decode_key(&self, key: &str, index: u32) -> anyhow::Result<(Option<String>, Option<String>, String, String)> {
         let network = self.chain().network();
         let res = if let Ok(mnemonic) = Mnemonic::from_phrase(&key, Language::English) {
-            let (sk, ivk, pa) = self.derive_secret_key(&mnemonic)?;
+            let (sk, ivk, pa) = self.derive_secret_key(&mnemonic, index)?;
             Ok((Some(key.to_string()), Some(sk), ivk, pa))
         } else if let Ok(Some(sk)) =
         decode_extended_spending_key(network.hrp_sapling_extended_spending_key(), &key)
@@ -63,14 +63,14 @@ impl KeyHelpers {
         -1
     }
 
-    pub fn derive_secret_key(&self, mnemonic: &Mnemonic) -> anyhow::Result<(String, String, String)> {
+    pub fn derive_secret_key(&self, mnemonic: &Mnemonic, index: u32) -> anyhow::Result<(String, String, String)> {
         let network = self.chain().network();
         let seed = Seed::new(&mnemonic, "");
         let master = ExtendedSpendingKey::master(seed.as_bytes());
         let path = [
             ChildIndex::Hardened(32),
             ChildIndex::Hardened(network.coin_type()),
-            ChildIndex::Hardened(0),
+            ChildIndex::Hardened(index),
         ];
         let extsk = ExtendedSpendingKey::from_path(&master, &path);
         let sk = encode_extended_spending_key(network.hrp_sapling_extended_spending_key(), &extsk);

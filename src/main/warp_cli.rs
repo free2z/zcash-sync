@@ -34,7 +34,7 @@ async fn test() -> anyhow::Result<()> {
     };
     let mut wallet = Wallet::new(CoinType::Zcash, DB_NAME);
     wallet.set_lwd_url(LWD_URL).unwrap();
-    wallet.new_account_with_key("main", &seed).unwrap();
+    wallet.new_account_with_key("main", &seed, 0).unwrap();
     // wallet.new_account_with_key("test", &seed2).unwrap();
     // wallet.new_account_with_key("zecpages", &ivk).unwrap();
 

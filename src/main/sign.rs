@@ -1,6 +1,7 @@
 use clap::{App, Arg};
 use std::fs::File;
 use std::io::{Read, Write};
+use std::str::FromStr;
 use sync::{KeyHelpers, Tx};
 use zcash_client_backend::encoding::decode_extended_spending_key;
 use zcash_primitives::consensus::{Network, Parameters};
@@ -41,8 +42,9 @@ async fn main() -> anyhow::Result<()> {
         _ => panic!("Invalid coin")
     };
     let key = dotenv::var("KEY").unwrap();
+    let index = u32::from_str(&dotenv::var("INDEX").unwrap_or_else(|_| "0".to_string())).unwrap();
     let kh = KeyHelpers::new(coin_type);
-    let (_seed, sk, _ivk, _address) = kh.decode_key(&key)?;
+    let (_seed, sk, _ivk, _address) = kh.decode_key(&key, index)?;
 
     let sk = sk.unwrap();
     let sk =

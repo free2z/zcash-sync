@@ -116,15 +116,15 @@ impl Wallet {
         self.key_helpers.is_valid_key(key)
     }
 
-    pub fn new_account(&self, name: &str, data: &str) -> anyhow::Result<i32> {
+    pub fn new_account(&self, name: &str, data: &str, index: u32) -> anyhow::Result<i32> {
         if data.is_empty() {
             let mut entropy = [0u8; 32];
             OsRng.fill_bytes(&mut entropy);
             let mnemonic = Mnemonic::from_entropy(&entropy, Language::English)?;
             let seed = mnemonic.phrase();
-            self.new_account_with_key(name, seed)
+            self.new_account_with_key(name, seed, index)
         } else {
-            self.new_account_with_key(name, data)
+            self.new_account_with_key(name, data, index)
         }
     }
 
@@ -144,11 +144,11 @@ impl Wallet {
         Ok(sk)
     }
 
-    pub fn new_account_with_key(&self, name: &str, key: &str) -> anyhow::Result<i32> {
-        let (seed, sk, ivk, pa) = self.key_helpers.decode_key(key)?;
+    pub fn new_account_with_key(&self, name: &str, key: &str, index: u32) -> anyhow::Result<i32> {
+        let (seed, sk, ivk, pa) = self.key_helpers.decode_key(key, index)?;
         let account = self
             .db
-            .store_account(name, seed.as_deref(), sk.as_deref(), &ivk, &pa)?;
+            .store_account(name, seed.as_deref(), index, sk.as_deref(), &ivk, &pa)?;
         if account > 0 {
             self.db.create_taddr(account as u32)?;
         }
@@ -598,7 +598,7 @@ mod tests {
         let seed = dotenv::var("SEED").unwrap();
         let mut wallet = Wallet::new(CoinType::Zcash, "zec.db");
         wallet.set_lwd_url(LWD_URL).unwrap();
-        wallet.new_account_with_key("test", &seed).unwrap();
+        wallet.new_account_with_key("test", &seed, 0).unwrap();
     }
 
     #[tokio::test]
@@ -609,7 +609,7 @@ mod tests {
         let seed = dotenv::var("SEED").unwrap();
         let kh = KeyHelpers::new(CoinType::Zcash);
         let (sk, vk, pa) =
-            kh.derive_secret_key(&Mnemonic::from_phrase(&seed, Language::English).unwrap()).unwrap();
+            kh.derive_secret_key(&Mnemonic::from_phrase(&seed, Language::English).unwrap(), 0).unwrap();
         println!("{} {} {}", sk, vk, pa);
         // let wallet = Wallet::new("zec.db");
         //

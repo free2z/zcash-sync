@@ -19,6 +19,7 @@ use serde::Serialize;
 use std::convert::TryFrom;
 use std::str::FromStr;
 use std::sync::Arc;
+use anyhow::anyhow;
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use chacha20poly1305::aead::{Aead, NewAead};
 use bech32::FromBase32;
@@ -130,6 +131,13 @@ impl Wallet {
         } else {
             self.new_account_with_key(name, data, index)
         }
+    }
+
+    pub fn new_sub_account(&self, id: u32, name: &str) -> anyhow::Result<i32> {
+        let seed = self.db.get_seed(id)?.ok_or_else(|| anyhow!("Account has no seed"))?;
+        let index = self.db.next_account_id(&seed)?;
+        let new_id = self.new_account_with_key(name, &seed, index as u32)?;
+        Ok(new_id)
     }
 
     pub fn get_backup(&self, account: u32) -> anyhow::Result<String> {

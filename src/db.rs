@@ -128,6 +128,16 @@ impl DbAdapter {
         Ok(id_tx)
     }
 
+    pub fn next_account_id(&self, seed: &str) -> anyhow::Result<i32> {
+        let index = self
+            .connection
+            .query_row("SELECT MAX(aindex) FROM accounts WHERE seed = ?1", [seed], |row| {
+                let aindex: Option<i32> = row.get(0)?;
+                Ok(aindex.unwrap_or(-1))
+            })? + 1;
+        Ok(index)
+    }
+
     pub fn get_fvks(&self) -> anyhow::Result<HashMap<u32, AccountViewKey>> {
         let mut statement = self
             .connection

@@ -63,6 +63,6 @@ pub fn derive_tkeys(network: &Network, phrase: &str, path: &str) -> anyhow::Resu
         &network.b58_script_address_prefix(),
         &address,
     );
-    let sk = secret_key.to_string();
+    let sk = secret_key.display_secret().to_string();
     Ok((sk, address))
 }

@@ -43,12 +43,12 @@ rayon = "1.5.1"
 tiny-bip39 = "0.8"
 rand = "0.8.4"
 rusqlite = { version = "^0.24", features = ["bundled"] }
-jubjub = "0.8.0"
-bls12_381 = "0.6"
-ff = "0.11"
-group = "0.11"
+jubjub = "0.9.0"
+bls12_381 = "0.7"
+ff = "0.12"
+group = "0.12"
 byteorder = "^1.4"
-secp256k1 = "0.20.2"
+secp256k1 = "0.21"
 tiny-hderive = "0.3.0"
 ripemd160 = "0.9.1"
 sha2 = "0.9.5"
@@ -76,31 +76,31 @@ ledger = ["ledger-apdu", "hmac", "ed25519-bip32"]
 
 [dependencies.zcash_client_backend]
 git = "https://github.com/hhanh00/librustzcash.git"
-rev = "c708380ef59b254f71a7d0b417e03f44fd267c2d"
+#rev = "c708380ef59b254f71a7d0b417e03f44fd267c2d"
 
 [dependencies.zcash_primitives]
 git = "https://github.com/hhanh00/librustzcash.git"
-rev = "c708380ef59b254f71a7d0b417e03f44fd267c2d"
+#rev = "c708380ef59b254f71a7d0b417e03f44fd267c2d"
 features = [ "transparent-inputs" ]
 
 [dependencies.zcash_proofs]
 git = "https://github.com/hhanh00/librustzcash.git"
-rev = "c708380ef59b254f71a7d0b417e03f44fd267c2d"
+#rev = "c708380ef59b254f71a7d0b417e03f44fd267c2d"
 
 [dependencies.zcash_params]
 path = "../zcash-params"
 
 [dependencies.zcash_address]
 git = "https://github.com/hhanh00/librustzcash.git"
-rev = "c708380ef59b254f71a7d0b417e03f44fd267c2d"
+#rev = "c708380ef59b254f71a7d0b417e03f44fd267c2d"
 
 [dependencies.zcash_encoding]
 git = "https://github.com/hhanh00/librustzcash.git"
-rev = "c708380ef59b254f71a7d0b417e03f44fd267c2d"
+#rev = "c708380ef59b254f71a7d0b417e03f44fd267c2d"
 
 [dependencies.zcash_note_encryption]
 git = "https://github.com/hhanh00/librustzcash.git"
-rev = "c708380ef59b254f71a7d0b417e03f44fd267c2d"
+#rev = "c708380ef59b254f71a7d0b417e03f44fd267c2d"
 
 [build-dependencies]
 tonic-build = "0.4.2"

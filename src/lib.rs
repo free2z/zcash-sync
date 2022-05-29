@@ -22,6 +22,7 @@ pub const LWD_URL: &str = "http://127.0.0.1:9067";
 mod builder;
 mod chain;
 mod commitment;
+mod orchard;
 mod contact;
 mod db;
 mod hash;
@@ -50,7 +51,7 @@ pub fn hex_to_hash(hex: &str) -> anyhow::Result<[u8; 32]> {
     Ok(hash)
 }
 
-pub use crate::builder::advance_tree;
+pub use crate::builder::{SaplingDomain, SaplingNode, advance_tree};
 pub use crate::chain::{
     calculate_tree_state_v2, connect_lightwalletd, download_chain, get_latest_height, sync,
     ChainError, DecryptNode,
@@ -68,3 +69,8 @@ pub use crate::scan::{latest_height, scan_all, sync_async};
 pub use crate::ua::{get_sapling, get_ua};
 pub use crate::wallet::{RecipientMemo, Wallet, WalletBalance, encrypt_backup, decrypt_backup};
 pub use crate::ledger::build_tx_ledger;
+
+mod tests;
+
+pub use tests::{test_pedersen_hash, test_empty_tree};
+pub use crate::orchard::ORCHARD_ROOTS;

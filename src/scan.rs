@@ -1,4 +1,4 @@
-use crate::builder::BlockProcessor;
+use crate::builder::{BlockProcessor, IOBytes, SaplingNode};
 use crate::chain::{Nf, NfRef};
 use crate::db::{AccountViewKey, DbAdapter, ReceivedNote};
 use crate::lw_rpc::compact_tx_streamer_client::CompactTxStreamerClient;
@@ -46,7 +46,7 @@ pub async fn scan_all(network: &Network, fvks: &[ExtendedFullViewingKey]) -> any
     let blocks = decrypter.decrypt_blocks(network, &cbs);
     info!("Decrypt Notes: {} ms", start.elapsed().as_millis());
 
-    let witnesses = calculate_tree_state_v2(&cbs, &blocks);
+    let witnesses = calculate_tree_state_v2::<crate::builder::SaplingDomain>(&cbs, &blocks);
 
     debug!("# Witnesses {}", witnesses.len());
     for w in witnesses.iter() {
@@ -159,7 +159,7 @@ pub async fn sync_async(
             let start = Instant::now();
 
             let mut new_ids_tx: HashMap<u32, TxIdHeight> = HashMap::new();
-            let mut witnesses: Vec<Witness> = vec![];
+            let mut witnesses: Vec<Witness<crate::builder::SaplingDomain>> = vec![];
 
             {
                 // db tx scope
@@ -272,13 +272,13 @@ pub async fn sync_async(
             }
 
             let start = Instant::now();
-            let mut nodes: Vec<Node> = vec![];
+            let mut nodes: Vec<SaplingNode> = vec![];
             for cb in blocks.0.iter() {
                 for tx in cb.vtx.iter() {
                     for co in tx.outputs.iter() {
                         let mut cmu = [0u8; 32];
                         cmu.copy_from_slice(&co.cmu);
-                        let node = Node::new(cmu);
+                        let node = SaplingNode::new(cmu);
                         nodes.push(node);
                     }
                 }

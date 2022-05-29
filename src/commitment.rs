@@ -4,6 +4,7 @@ use std::io::{Read, Write};
 use zcash_primitives::merkle_tree::{CommitmentTree, Hashable};
 use zcash_primitives::sapling::Node;
 use zcash_encoding::{Optional, Vector};
+use crate::builder::{Domain, IOBytes, SaplingDomain, SaplingNode};
 
 /*
 Same behavior and structure as CommitmentTree<Node> from librustzcash
@@ -20,11 +21,13 @@ value should be used there.
 
 Remark: It's possible to have a grand parent but no parent.
  */
+pub type MTNode = [u8; 32];
+
 #[derive(Clone)]
-pub struct CTree {
-    pub(crate) left: Option<Node>,
-    pub(crate) right: Option<Node>,
-    pub(crate) parents: Vec<Option<Node>>,
+pub struct CTree<D: Domain> {
+    pub(crate) left: Option<D::Node>,
+    pub(crate) right: Option<D::Node>,
+    pub(crate) parents: Vec<Option<D::Node>>,
 }
 
 /*
@@ -75,19 +78,19 @@ Instead, a new cursor starts. Eventually, it fills up and a new value
 gets pushed into `filled`.
 */
 #[derive(Clone)]
-pub struct Witness {
+pub struct Witness<D: Domain> {
     pub position: usize,
-    pub tree: CTree, // commitment tree at the moment the witness is created: immutable
-    pub filled: Vec<Node>, // as more nodes are added, levels get filled up: won't change anymore
-    pub cursor: CTree, // partial tree which still updates when nodes are added
+    pub tree: CTree<D>, // commitment tree at the moment the witness is created: immutable
+    pub filled: Vec<D::Node>, // as more nodes are added, levels get filled up: won't change anymore
+    pub cursor: CTree<D>, // partial tree which still updates when nodes are added
 
     // not used for decryption but identifies the witness
     pub id_note: u32,
     pub note: Option<DecryptedNote>,
 }
 
-impl Witness {
-    pub fn new(position: usize, id_note: u32, note: Option<DecryptedNote>) -> Witness {
+impl <D: Domain> Witness<D> {
+    pub fn new(position: usize, id_note: u32, note: Option<DecryptedNote>) -> Witness<D> {
         Witness {
             position,
             id_note,
@@ -98,9 +101,51 @@ impl Witness {
         }
     }
 
+    pub fn auth_path(&self, height: usize, empty_roots: &[D::Node]) -> Vec<D::Node> {
+        let mut filled_iter = self.filled.iter();
+        let mut cursor_used = false;
+        let mut next_filler = move |depth: usize| {
+            if let Some(f) = filled_iter.next() {
+                f.clone()
+            }
+            else if !cursor_used {
+                cursor_used = true;
+                self.cursor.root(depth, empty_roots)
+            }
+            else {
+                empty_roots[depth]
+            }
+        };
+
+        let mut auth_path = vec![];
+        if let Some(left) = self.tree.left {
+            if self.tree.right.is_some() {
+                auth_path.push(left);
+            }
+            else {
+                auth_path.push(next_filler(0));
+            }
+        }
+        for i in 1..height {
+            let p = if i-1 < self.tree.parents.len() {
+                self.tree.parents[i-1]
+            } else { None };
+
+            if let Some(node) = p {
+                auth_path.push(node);
+            }
+            else {
+                auth_path.push(next_filler(i));
+            }
+        }
+        auth_path
+    }
+}
+
+impl Witness<SaplingDomain> {
     pub fn read<R: Read>(id_note: u32, mut reader: R) -> std::io::Result<Self> {
         let tree = CTree::read(&mut reader)?;
-        let filled = Vector::read(&mut reader, |r| Node::read(r))?;
+        let filled = Vector::read(&mut reader, |r| Node::read(r).map(SaplingNode))?;
         let cursor = Optional::read(&mut reader, |r| CTree::read(r))?;
 
         let mut witness = Witness {
@@ -118,7 +163,7 @@ impl Witness {
 
     pub fn write<W: Write>(&self, mut writer: W) -> std::io::Result<()> {
         self.tree.write(&mut writer)?;
-        Vector::write(&mut writer, &self.filled, |w, n| n.write(w))?;
+        Vector::write(&mut writer, &self.filled, |w, n| n.0.write(w))?;
         if self.cursor.left == None && self.cursor.right == None {
             writer.write_u8(0)?;
         } else {
@@ -129,8 +174,8 @@ impl Witness {
     }
 }
 
-impl CTree {
-    pub fn new() -> CTree {
+impl <D: Domain> CTree<D> {
+    pub fn new() -> CTree<D> {
         CTree {
             left: None,
             right: None,
@@ -147,9 +192,9 @@ impl CTree {
     }
 
     pub fn read<R: Read>(mut reader: R) -> std::io::Result<Self> {
-        let left = Optional::read(&mut reader, |r| Node::read(r))?;
-        let right = Optional::read(&mut reader, |r| Node::read(r))?;
-        let parents = Vector::read(&mut reader, |r| Optional::read(r, |r| Node::read(r)))?;
+        let left = Optional::read(&mut reader, |r| D::Node::read(r))?;
+        let right = Optional::read(&mut reader, |r| D::Node::read(r))?;
+        let parents = Vector::read(&mut reader, |r| Optional::read(r, |r| D::Node::read(r)))?;
 
         Ok(CTree {
             left,
@@ -175,7 +220,7 @@ impl CTree {
         p
     }
 
-    pub fn clone_trimmed(&self, depth: usize) -> CTree {
+    pub fn clone_trimmed(&self, depth: usize) -> CTree<D> {
         let mut tree = self.clone();
         tree.parents.truncate(depth);
         if let Some(None) = tree.parents.last() {
@@ -189,5 +234,28 @@ impl CTree {
         let mut bb: Vec<u8> = vec![];
         self.write(&mut bb).unwrap();
         CommitmentTree::<Node>::read(&*bb).unwrap()
+    }
+
+    pub fn root(&self, height: usize, empty_roots: &[D::Node]) -> D::Node {
+        // merge the leaves
+        let left = self.left.unwrap_or(D::Node::uncommitted());
+        let right = self.right.unwrap_or(D::Node::uncommitted());
+        let mut cur = D::node_combine(0, &left, &right);
+        // merge the parents
+        let mut depth = 1;
+        for p in self.parents.iter() {
+            if let Some(ref left) = p {
+                cur = D::node_combine(depth, &left, &cur);
+            }
+            else {
+                cur = D::node_combine(depth, &cur, &empty_roots[depth]);
+            }
+            depth += 1;
+        }
+        // fill in the missing levels
+        for d in depth..height {
+            cur = D::node_combine(d, &cur, &empty_roots[d]);
+        }
+        cur
     }
 }

@@ -1,5 +1,5 @@
 use std::time::Instant;
-use sync::{advance_tree, scan_all, CTree, Witness};
+use sync::{advance_tree, scan_all, CTree, Witness, SaplingDomain, SaplingNode};
 use zcash_client_backend::encoding::decode_extended_full_viewing_key;
 use zcash_primitives::consensus::{Network, Parameters};
 use zcash_primitives::merkle_tree::{CommitmentTree, IncrementalWitness};
@@ -32,7 +32,7 @@ fn test_increasing_notes() {
     let mut _tree1: CommitmentTree<Node> = CommitmentTree::empty();
     let mut tree2 = CTree::new();
     let mut _ws: Vec<IncrementalWitness<Node>> = vec![];
-    let mut ws2: Vec<Witness> = vec![];
+    let mut ws2: Vec<Witness<SaplingDomain>> = vec![];
     let start = Instant::now();
     let mut first_block = true;
     for i in 0..NUM_CHUNKS {
@@ -52,7 +52,7 @@ fn test_increasing_notes() {
                 // ws.push(w);
                 ws2.push(Witness::new(v, 0, None));
             }
-            nodes.push(node);
+            nodes.push(SaplingNode(node));
         }
         let (new_tree, new_witnesses) = advance_tree(&tree2, &ws2, &mut nodes, first_block);
         first_block = false;
@@ -79,7 +79,7 @@ fn test_increasing_gap(run_normal: bool, run_warp: bool) {
     let mut tree1: CommitmentTree<Node> = CommitmentTree::empty();
     let mut tree2 = CTree::new();
     let mut ws: Vec<IncrementalWitness<Node>> = vec![];
-    let mut ws2: Vec<Witness> = vec![];
+    let mut ws2: Vec<Witness<SaplingDomain>> = vec![];
 
     // Add our received notes
     let mut pos = 0usize;
@@ -96,7 +96,7 @@ fn test_increasing_gap(run_normal: bool, run_warp: bool) {
             ws.push(w);
         }
         ws2.push(Witness::new(pos, 0, None));
-        nodes.push(node);
+        nodes.push(SaplingNode(node));
         pos += 1;
     }
 
@@ -119,7 +119,7 @@ fn test_increasing_gap(run_normal: bool, run_warp: bool) {
                     w.append(node).unwrap();
                 }
             }
-            nodes.push(node);
+            nodes.push(SaplingNode(node));
             pos += 1;
         }
 

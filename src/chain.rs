@@ -19,7 +19,8 @@ use zcash_primitives::sapling::note_encryption::SaplingDomain;
 use zcash_primitives::sapling::{Node, Note, PaymentAddress};
 use zcash_primitives::transaction::components::sapling::CompactOutputDescription;
 use zcash_primitives::zip32::ExtendedFullViewingKey;
-use zcash_note_encryption::{COMPACT_NOTE_SIZE, Domain, EphemeralKeyBytes, ShieldedOutput};
+use zcash_note_encryption::{COMPACT_NOTE_SIZE, Domain as EncDomain, EphemeralKeyBytes, ShieldedOutput};
+use crate::builder::{Domain, IOBytes};
 
 const MAX_CHUNK: u32 = 50000;
 
@@ -168,7 +169,7 @@ pub fn to_output_description(co: &CompactOutput) -> CompactOutputDescription {
 
 struct AccountOutput<'a, N: Parameters> {
     epk: EphemeralKeyBytes,
-    cmu: <SaplingDomain<N> as Domain>::ExtractedCommitmentBytes,
+    cmu: <SaplingDomain<N> as EncDomain>::ExtractedCommitmentBytes,
     ciphertext: [u8; COMPACT_NOTE_SIZE],
     tx_index: usize,
     output_index: usize,
@@ -184,7 +185,7 @@ impl <'a, N: Parameters> AccountOutput<'a, N> {
         let epk = EphemeralKeyBytes::from(epk_bytes);
         let mut cmu_bytes = [0u8; 32];
         cmu_bytes.copy_from_slice(&co.cmu);
-        let cmu = <SaplingDomain<N> as Domain>::ExtractedCommitmentBytes::from(cmu_bytes);
+        let cmu = <SaplingDomain<N> as EncDomain>::ExtractedCommitmentBytes::from(cmu_bytes);
         let mut ciphertext_bytes = [0u8; COMPACT_NOTE_SIZE];
         ciphertext_bytes.copy_from_slice(&co.ciphertext);
 
@@ -206,7 +207,7 @@ impl <'a, N: Parameters> ShieldedOutput<SaplingDomain<N>, COMPACT_NOTE_SIZE> for
         self.epk.clone()
     }
 
-    fn cmstar_bytes(&self) -> <SaplingDomain<N> as Domain>::ExtractedCommitmentBytes {
+    fn cmstar_bytes(&self) -> <SaplingDomain<N> as EncDomain>::ExtractedCommitmentBytes {
         self.cmu
     }
 
@@ -371,9 +372,9 @@ fn calculate_tree_state_v1(
     witnesses
 }
 
-pub fn calculate_tree_state_v2(cbs: &[CompactBlock], blocks: &[DecryptedBlock]) -> Vec<Witness> {
+pub fn calculate_tree_state_v2<D: Domain>(cbs: &[CompactBlock], blocks: &[DecryptedBlock]) -> Vec<Witness<D>> {
     let mut p = 0usize;
-    let mut nodes: Vec<Node> = vec![];
+    let mut nodes: Vec<D::Node> = vec![];
     let mut positions: Vec<usize> = vec![];
 
     let start = Instant::now();
@@ -389,7 +390,7 @@ pub fn calculate_tree_state_v2(cbs: &[CompactBlock], blocks: &[DecryptedBlock]) 
             for co in tx.outputs.iter() {
                 let mut cmu = [0u8; 32];
                 cmu.copy_from_slice(&co.cmu);
-                let node = Node::new(cmu);
+                let node = D::Node::new(cmu);
                 nodes.push(node);
 
                 if let Some(nn) = n {
@@ -450,7 +451,7 @@ pub async fn sync(network: &Network, vks: HashMap<u32, AccountViewKey>, ld_url: 
     eprintln!("  Batch Decrypt: {} ms", batch_decrypt_elapsed);
 
     let start = Instant::now();
-    let witnesses = calculate_tree_state_v2(&cbs, &blocks);
+    let witnesses = calculate_tree_state_v2::<crate::builder::SaplingDomain>(&cbs, &blocks);
     eprintln!("Tree State & Witnesses: {} ms", start.elapsed().as_millis());
 
     eprintln!("# Witnesses {}", witnesses.len());
@@ -478,6 +479,7 @@ mod tests {
     use std::time::Instant;
     use zcash_client_backend::encoding::decode_extended_full_viewing_key;
     use zcash_primitives::consensus::{Network, NetworkUpgrade, Parameters};
+    use crate::builder::SaplingDomain;
 
     const NETWORK: &Network = &Network::MainNetwork;
 
@@ -529,7 +531,7 @@ mod tests {
         // let witnesses = calculate_tree_state(&cbs, &blocks, 0, tree_state);
 
         let start = Instant::now();
-        let witnesses = calculate_tree_state_v2(&cbs, &blocks);
+        let witnesses = calculate_tree_state_v2::<SaplingDomain>(&cbs, &blocks);
         eprintln!("Tree State & Witnesses: {} ms", start.elapsed().as_millis());
 
         eprintln!("# Witnesses {}", witnesses.len());

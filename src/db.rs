@@ -13,6 +13,7 @@ use zcash_primitives::sapling::{Diversifier, Node, Note, Rseed, SaplingIvk};
 use zcash_primitives::zip32::{DiversifierIndex, ExtendedFullViewingKey};
 use serde::{Serialize, Deserialize};
 use zcash_params::coin::{CoinType, get_coin_chain, get_coin_id};
+use crate::builder::SaplingDomain;
 
 mod migration;
 
@@ -221,7 +222,7 @@ impl DbAdapter {
         height: u32,
         hash: &[u8],
         timestamp: u32,
-        tree: &CTree,
+        tree: &CTree<SaplingDomain>,
     ) -> anyhow::Result<()> {
         log::debug!("+block");
         let mut bb: Vec<u8> = vec![];
@@ -281,7 +282,7 @@ impl DbAdapter {
 
     pub fn store_witnesses(
         &self,
-        witness: &Witness,
+        witness: &Witness<SaplingDomain>,
         height: u32,
         id_note: u32,
     ) -> anyhow::Result<()> {
@@ -370,7 +371,7 @@ impl DbAdapter {
         }))
     }
 
-    pub fn get_tree(&self) -> anyhow::Result<(CTree, Vec<Witness>)> {
+    pub fn get_tree(&self) -> anyhow::Result<(CTree<SaplingDomain>, Vec<Witness<SaplingDomain>>)> {
         let res = self.connection.query_row(
             "SELECT height, sapling_tree FROM blocks WHERE height = (SELECT MAX(height) FROM blocks)",
             NO_PARAMS, |row| {
@@ -388,7 +389,7 @@ impl DbAdapter {
                     let witness: Vec<u8> = row.get(1)?;
                     Ok(Witness::read(id_note, &*witness).unwrap())
                 })?;
-                let mut witnesses: Vec<Witness> = vec![];
+                let mut witnesses: Vec<Witness<SaplingDomain>> = vec![];
                 for w in ws {
                     witnesses.push(w?);
                 }

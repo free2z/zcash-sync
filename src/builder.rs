@@ -1,3 +1,5 @@
+use std::io::{Read, Write};
+use std::marker::PhantomData;
 use crate::commitment::{CTree, Witness};
 use crate::hash::{pedersen_hash, pedersen_hash_inner};
 use ff::PrimeField;
@@ -5,43 +7,93 @@ use group::Curve;
 use jubjub::{AffinePoint, ExtendedPoint};
 use rayon::prelude::IntoParallelIterator;
 use rayon::prelude::*;
-use zcash_primitives::sapling::Node;
+use zcash_primitives::merkle_tree::HashSer;
+use zcash_primitives::sapling::Note;
 
-#[inline(always)]
-fn batch_node_combine1(depth: usize, left: &Node, right: &Node) -> ExtendedPoint {
-    // Node::new(pedersen_hash(depth as u8, &left.repr, &right.repr))
-    ExtendedPoint::from(pedersen_hash_inner(depth as u8, &left.repr, &right.repr))
+pub trait IOBytes: Sized {
+    fn new(hash: [u8; 32]) -> Self;
+    fn write<W: Write>(&self, w: W) -> std::io::Result<()>;
+    fn read<R: Read>(r: R) -> std::io::Result<Self>;
+    fn uncommitted() -> Self;
 }
 
-#[inline(always)]
-fn node_combine(depth: usize, left: &Node, right: &Node) -> Node {
-    Node::new(pedersen_hash(depth as u8, &left.repr, &right.repr))
+pub trait Domain: Clone {
+    type Node: Clone + Send + Sync + Copy + IOBytes;
+    fn node_combine(depth: usize, left: &Self::Node, right: &Self::Node) -> Self::Node;
 }
 
-trait Builder<T, C> {
-    fn collect(&mut self, commitments: &[Node], context: &C) -> usize;
+#[derive(Copy, Clone, PartialEq)]
+pub struct SaplingNode(pub zcash_primitives::sapling::Node);
+impl IOBytes for SaplingNode {
+    fn new(hash: [u8; 32]) -> Self {
+        SaplingNode(zcash_primitives::sapling::Node::new(hash))
+    }
+
+    fn write<W: Write>(&self, w: W) -> std::io::Result<()> {
+        self.0.write(w)
+    }
+
+    fn read<R: Read>(r: R) -> std::io::Result<Self> {
+        zcash_primitives::sapling::Node::read(r).map(SaplingNode)
+    }
+
+    fn uncommitted() -> Self {
+        let n = Note::uncommitted().to_repr();
+        Self::new(n)
+    }
+}
+
+#[derive(Clone)]
+pub struct SaplingDomain;
+impl Domain for SaplingDomain {
+    type Node = SaplingNode;
+
+    fn node_combine(depth: usize, left: &Self::Node, right: &Self::Node) -> Self::Node {
+        Self::Node::new(pedersen_hash(depth as u8, &left.0.repr, &right.0.repr))
+    }
+}
+
+// #[inline(always)]
+// fn batch_node_combine1(depth: usize, left: &Node, right: &Node) -> ExtendedPoint {
+//     // Node::new(pedersen_hash(depth as u8, &left.repr, &right.repr))
+//     ExtendedPoint::from(pedersen_hash_inner(depth as u8, &left.repr, &right.repr))
+// }
+//
+
+// #[inline(always)]
+// fn node_combine(depth: usize, left: &Node, right: &Node) -> Node {
+// }
+
+trait Builder<D: Domain> {
+    type Context;
+    type Output;
+
+    fn collect(&mut self, commitments: &[D::Node], context: &Self::Context) -> usize;
     fn up(&mut self);
     fn finished(&self) -> bool;
-    fn finalize(self, context: &C) -> T;
+    fn finalize(self, context: &Self::Context) -> Self::Output;
 }
 
-struct CTreeBuilder {
-    left: Option<Node>,
-    right: Option<Node>,
-    prev_tree: CTree,
-    next_tree: CTree,
+struct CTreeBuilder<D: Domain> {
+    left: Option<D::Node>,
+    right: Option<D::Node>,
+    prev_tree: CTree<D>,
+    next_tree: CTree<D>,
     start: usize,
     total_len: usize,
     depth: usize,
-    offset: Option<Node>,
+    offset: Option<D::Node>,
     first_block: bool,
 }
 
-impl Builder<CTree, ()> for CTreeBuilder {
-    fn collect(&mut self, commitments: &[Node], _context: &()) -> usize {
+impl <D: Domain> Builder<D> for CTreeBuilder<D> {
+    type Context = ();
+    type Output = CTree<D>;
+
+    fn collect(&mut self, commitments: &[D::Node], _context: &()) -> usize {
         assert!(self.right.is_none() || self.left.is_some()); // R can't be set without L
 
-        let offset: Option<Node>;
+        let offset: Option<D::Node>;
         let m: usize;
 
         if self.left.is_some() && self.right.is_none() {
@@ -84,7 +136,7 @@ impl Builder<CTree, ()> for CTreeBuilder {
 
     fn up(&mut self) {
         let h = if self.left.is_some() && self.right.is_some() {
-            Some(node_combine(
+            Some(D::node_combine(
                 self.depth,
                 &self.left.unwrap(),
                 &self.right.unwrap(),
@@ -111,7 +163,7 @@ impl Builder<CTree, ()> for CTreeBuilder {
         self.depth >= self.prev_tree.parents.len() && self.left.is_none() && self.right.is_none()
     }
 
-    fn finalize(self, _context: &()) -> CTree {
+    fn finalize(self, _context: &()) -> CTree<D> {
         if self.total_len > 0 {
             self.next_tree
         } else {
@@ -120,13 +172,13 @@ impl Builder<CTree, ()> for CTreeBuilder {
     }
 }
 
-impl CTreeBuilder {
-    fn new(prev_tree: CTree, len: usize, first_block: bool) -> CTreeBuilder {
+impl <D: Domain> CTreeBuilder<D> {
+    fn new(prev_tree: &CTree<D>, len: usize, first_block: bool) -> Self {
         let start = prev_tree.get_position();
         CTreeBuilder {
             left: prev_tree.left,
             right: prev_tree.right,
-            prev_tree,
+            prev_tree: prev_tree.clone(),
             next_tree: CTree::new(),
             start,
             total_len: len,
@@ -138,10 +190,10 @@ impl CTreeBuilder {
 
     #[inline(always)]
     fn get_opt<'a>(
-        commitments: &'a [Node],
+        commitments: &'a [D::Node],
         index: usize,
-        offset: &'a Option<Node>,
-    ) -> Option<&'a Node> {
+        offset: &'a Option<D::Node>,
+    ) -> Option<&'a D::Node> {
         if offset.is_some() {
             if index > 0 {
                 commitments.get(index - 1)
@@ -154,11 +206,11 @@ impl CTreeBuilder {
     }
 
     #[inline(always)]
-    fn get<'a>(commitments: &'a [Node], index: usize, offset: &'a Option<Node>) -> &'a Node {
+    fn get<'a>(commitments: &'a [D::Node], index: usize, offset: &'a Option<D::Node>) -> &'a D::Node {
         Self::get_opt(commitments, index, offset).unwrap()
     }
 
-    fn adjusted_start(&self, prev: &Option<Node>) -> usize {
+    fn adjusted_start(&self, prev: &Option<D::Node>) -> usize {
         if prev.is_some() {
             self.start - 1
         } else {
@@ -167,64 +219,52 @@ impl CTreeBuilder {
     }
 }
 
-fn combine_level(commitments: &mut [Node], offset: Option<Node>, n: usize, depth: usize) -> usize {
+fn combine_level<D: Domain>(commitments: &mut [D::Node], offset: Option<D::Node>, n: usize, depth: usize) -> usize {
     assert_eq!(n % 2, 0);
 
     let nn = n / 2;
-    let next_level: Vec<_> = if nn > 100 {
-        let hash_extended: Vec<_> = (0..nn)
-            .into_par_iter()
-            .map(|i| {
-                batch_node_combine1(
-                    depth,
-                    CTreeBuilder::get(commitments, 2 * i, &offset),
-                    CTreeBuilder::get(commitments, 2 * i + 1, &offset),
-                )
-            })
-            .collect();
-        let mut hash_affine: Vec<AffinePoint> = vec![AffinePoint::identity(); nn];
-        ExtendedPoint::batch_normalize(&hash_extended, &mut hash_affine);
-        hash_affine
-            .iter()
-            .map(|p| Node::new(p.get_u().to_repr()))
-            .collect()
-    } else {
+    let next_level: Vec<_> =
         (0..nn)
             .into_par_iter()
             .map(|i| {
-                node_combine(
+                D::node_combine(
                     depth,
-                    CTreeBuilder::get(commitments, 2 * i, &offset),
-                    CTreeBuilder::get(commitments, 2 * i + 1, &offset),
+                    CTreeBuilder::<D>::get(commitments, 2 * i, &offset),
+                    CTreeBuilder::<D>::get(commitments, 2 * i + 1, &offset),
                 )
             })
-            .collect()
-    };
+            .collect();
+
 
     commitments[0..nn].copy_from_slice(&next_level);
     nn
 }
 
-struct WitnessBuilder {
-    witness: Witness,
+struct WitnessBuilder<D: Domain> {
+    witness: Witness<D>,
     p: usize,
     inside: bool,
+    _phantom: PhantomData<D>,
 }
 
-impl WitnessBuilder {
-    fn new(tree_builder: &CTreeBuilder, prev_witness: Witness, count: usize) -> WitnessBuilder {
+impl <D: Domain> WitnessBuilder<D> {
+    fn new(tree_builder: &CTreeBuilder<D>, prev_witness: &Witness<D>, count: usize) -> Self {
         let position = prev_witness.position;
         let inside = position >= tree_builder.start && position < tree_builder.start + count;
         WitnessBuilder {
-            witness: prev_witness,
+            witness: prev_witness.clone(),
             p: position,
             inside,
+            _phantom: PhantomData::default(),
         }
     }
 }
 
-impl Builder<Witness, CTreeBuilder> for WitnessBuilder {
-    fn collect(&mut self, commitments: &[Node], context: &CTreeBuilder) -> usize {
+impl <D: Domain> Builder<D> for WitnessBuilder<D> {
+    type Context = CTreeBuilder<D>;
+    type Output = Witness<D>;
+
+    fn collect(&mut self, commitments: &[D::Node], context: &CTreeBuilder<D>) -> usize {
         let offset = context.offset;
         let depth = context.depth;
 
@@ -234,16 +274,16 @@ impl Builder<Witness, CTreeBuilder> for WitnessBuilder {
             let rp = self.p - context.adjusted_start(&offset);
             if depth == 0 {
                 if self.p % 2 == 1 {
-                    tree.left = Some(*CTreeBuilder::get(commitments, rp - 1, &offset));
-                    tree.right = Some(*CTreeBuilder::get(commitments, rp, &offset));
+                    tree.left = Some(*CTreeBuilder::<D>::get(commitments, rp - 1, &offset));
+                    tree.right = Some(*CTreeBuilder::<D>::get(commitments, rp, &offset));
                 } else {
-                    tree.left = Some(*CTreeBuilder::get(commitments, rp, &offset));
+                    tree.left = Some(*CTreeBuilder::<D>::get(commitments, rp, &offset));
                     tree.right = None;
                 }
             } else {
                 if self.p % 2 == 1 {
                     tree.parents
-                        .push(Some(*CTreeBuilder::get(commitments, rp - 1, &offset)));
+                        .push(Some(*CTreeBuilder::<D>::get(commitments, rp - 1, &offset)));
                 } else if self.p != 0 {
                     tree.parents.push(None);
                 }
@@ -265,7 +305,7 @@ impl Builder<Witness, CTreeBuilder> for WitnessBuilder {
         // println!("P {} P1 {} S {} AS {}", self.p, p1, context.start, context.adjusted_start(&right));
         let has_p1 = p1 >= context.adjusted_start(&right) && p1 < context.start + commitments.len();
         if has_p1 {
-            let p1 = CTreeBuilder::get(commitments, p1 - context.adjusted_start(&right), &right);
+            let p1 = CTreeBuilder::<D>::get(commitments, p1 - context.adjusted_start(&right), &right);
             if depth == 0 {
                 if tree.right.is_none() {
                     self.witness.filled.push(*p1);
@@ -287,7 +327,7 @@ impl Builder<Witness, CTreeBuilder> for WitnessBuilder {
         false
     }
 
-    fn finalize(mut self, context: &CTreeBuilder) -> Witness {
+    fn finalize(mut self, context: &CTreeBuilder<D>) -> Witness<D> {
         if context.total_len == 0 {
             self.witness.cursor = CTree::new();
 
@@ -329,23 +369,23 @@ impl Builder<Witness, CTreeBuilder> for WitnessBuilder {
 }
 
 #[allow(dead_code)]
-pub fn advance_tree(
-    prev_tree: &CTree,
-    prev_witnesses: &[Witness],
-    mut commitments: &mut [Node],
+pub fn advance_tree<D: Domain>(
+    prev_tree: &CTree<D>,
+    prev_witnesses: &[Witness<D>],
+    mut commitments: &mut [D::Node],
     first_block: bool,
-) -> (CTree, Vec<Witness>) {
-    let mut builder = CTreeBuilder::new(prev_tree.clone(), commitments.len(), first_block);
+) -> (CTree<D>, Vec<Witness<D>>) {
+    let mut builder = CTreeBuilder::<D>::new(&prev_tree, commitments.len(), first_block);
     let mut witness_builders: Vec<_> = prev_witnesses
         .iter()
-        .map(|witness| WitnessBuilder::new(&builder, witness.clone(), commitments.len()))
+        .map(|witness| WitnessBuilder::new(&builder, &witness, commitments.len()))
         .collect();
     while !commitments.is_empty() || !builder.finished() {
         let n = builder.collect(commitments, &());
         for b in witness_builders.iter_mut() {
             b.collect(commitments, &builder);
         }
-        let nn = combine_level(commitments, builder.offset, n, builder.depth);
+        let nn = combine_level::<D>(commitments, builder.offset, n, builder.depth);
         builder.up();
         for b in witness_builders.iter_mut() {
             b.up();
@@ -361,14 +401,14 @@ pub fn advance_tree(
     (tree, witnesses)
 }
 
-pub struct BlockProcessor {
-    prev_tree: CTree,
-    prev_witnesses: Vec<Witness>,
+pub struct BlockProcessor<D: Domain> {
+    prev_tree: CTree<D>,
+    prev_witnesses: Vec<Witness<D>>,
     first_block: bool,
 }
 
-impl BlockProcessor {
-    pub fn new(prev_tree: &CTree, prev_witnesses: &[Witness]) -> BlockProcessor {
+impl <D: Domain> BlockProcessor<D> {
+    pub fn new(prev_tree: &CTree<D>, prev_witnesses: &[Witness<D>]) -> BlockProcessor<D> {
         BlockProcessor {
             prev_tree: prev_tree.clone(),
             prev_witnesses: prev_witnesses.to_vec(),
@@ -376,7 +416,7 @@ impl BlockProcessor {
         }
     }
 
-    pub fn add_nodes(&mut self, nodes: &mut [Node], new_witnesses: &[Witness]) {
+    pub fn add_nodes(&mut self, nodes: &mut [D::Node], new_witnesses: &[Witness<D>]) {
         if nodes.is_empty() {
             return;
         }
@@ -392,7 +432,7 @@ impl BlockProcessor {
         self.prev_witnesses = ws;
     }
 
-    pub fn finalize(self) -> (CTree, Vec<Witness>) {
+    pub fn finalize(self) -> (CTree<D>, Vec<Witness<D>>) {
         if self.first_block {
             (self.prev_tree, self.prev_witnesses)
         } else {
@@ -405,25 +445,25 @@ impl BlockProcessor {
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
-    use crate::builder::{advance_tree, BlockProcessor};
+    use crate::builder::{advance_tree, BlockProcessor, Domain, IOBytes, SaplingDomain, SaplingNode};
     use crate::chain::DecryptedNote;
     use crate::commitment::{CTree, Witness};
     use crate::print::{print_ctree, print_tree, print_witness, print_witness2};
     use zcash_primitives::merkle_tree::{CommitmentTree, IncrementalWitness};
     use zcash_primitives::sapling::Node;
 
-    fn make_nodes(p: usize, len: usize) -> Vec<Node> {
+    fn make_nodes(p: usize, len: usize) -> Vec<<SaplingDomain as Domain>::Node> {
         let nodes: Vec<_> = (p..p + len)
             .map(|v| {
                 let mut bb = [0u8; 32];
                 bb[0..8].copy_from_slice(&v.to_be_bytes());
-                Node::new(bb)
+                SaplingNode::new(bb)
             })
             .collect();
         nodes
     }
 
-    fn make_witnesses(p: usize, len: usize) -> Vec<Witness> {
+    fn make_witnesses<D: Domain>(p: usize, len: usize) -> Vec<Witness<D>> {
         let witnesses: Vec<_> = (p..p + len).map(|v| Witness::new(v, 0, None)).collect();
         witnesses
     }
@@ -431,19 +471,19 @@ mod tests {
     fn update_witnesses1(
         tree: &mut CommitmentTree<Node>,
         ws: &mut Vec<IncrementalWitness<Node>>,
-        nodes: &[Node],
+        nodes: &[SaplingNode],
     ) {
         for n in nodes.iter() {
-            tree.append(n.clone()).unwrap();
+            tree.append(n.clone().0).unwrap();
             for w in ws.iter_mut() {
-                w.append(n.clone()).unwrap();
+                w.append(n.clone().0).unwrap();
             }
             let w = IncrementalWitness::<Node>::from_tree(&tree);
             ws.push(w);
         }
     }
 
-    fn compare_witness(w1: &IncrementalWitness<Node>, w2: &Witness) {
+    fn compare_witness(w1: &IncrementalWitness<Node>, w2: &Witness<SaplingDomain>) {
         let mut bb1: Vec<u8> = vec![];
         w1.write(&mut bb1).unwrap();
         let mut bb2: Vec<u8> = vec![];
@@ -460,8 +500,8 @@ mod tests {
     #[test]
     fn test_simple() {
         let v = [0u8; 32];
-        let mut bp = BlockProcessor::new(&CTree::new(), &[]);
-        let mut nodes = [Node::new(v)];
+        let mut bp = BlockProcessor::<SaplingDomain>::new(&CTree::new(), &[]);
+        let mut nodes = [SaplingNode::new(v)];
         bp.add_nodes(&mut [], &[]);
         bp.add_nodes(&mut nodes, &[Witness::new(0, 0, None)]);
         bp.finalize();
@@ -472,7 +512,7 @@ mod tests {
         for n1 in 0..=40 {
             for n2 in 0..=40 {
                 println!("{} {}", n1, n2);
-                let mut bp = BlockProcessor::new(&CTree::new(), &[]);
+                let mut bp = BlockProcessor::<SaplingDomain>::new(&CTree::new(), &[]);
                 let mut tree1: CommitmentTree<Node> = CommitmentTree::empty();
                 let mut ws1: Vec<IncrementalWitness<Node>> = vec![];
 
@@ -502,7 +542,7 @@ mod tests {
                 let mut tree1: CommitmentTree<Node> = CommitmentTree::empty();
                 let mut ws1: Vec<IncrementalWitness<Node>> = vec![];
                 let mut tree2 = CTree::new();
-                let mut ws2: Vec<Witness> = vec![];
+                let mut ws2: Vec<Witness<SaplingDomain>> = vec![];
 
                 {
                     let mut bp = BlockProcessor::new(&tree2, &ws2);
@@ -572,14 +612,14 @@ mod tests {
         num_nodes: usize,
         num_chunks: usize,
         witness_percent: f64,
-        initial: Option<(CTree, Vec<Witness>)>,
-    ) -> (CTree, Vec<Witness>) {
+        initial: Option<(CTree<SaplingDomain>, Vec<Witness<SaplingDomain>>)>,
+    ) -> (CTree<SaplingDomain>, Vec<Witness<SaplingDomain>>) {
         let witness_freq = (100.0 / witness_percent) as usize;
 
         let mut tree1: CommitmentTree<Node> = CommitmentTree::empty();
         let mut tree2 = CTree::new();
         let mut ws: Vec<IncrementalWitness<Node>> = vec![];
-        let mut ws2: Vec<Witness> = vec![];
+        let mut ws2: Vec<Witness<SaplingDomain>> = vec![];
         if let Some((t0, ws0)) = initial {
             tree2 = t0;
             ws2 = ws0;
@@ -601,12 +641,13 @@ mod tests {
         for i in 0..num_chunks {
             println!("{}", i);
             let mut nodes: Vec<_> = vec![];
-            let mut ws2: Vec<Witness> = vec![];
+            let mut ws2: Vec<Witness<SaplingDomain>> = vec![];
             for j in 0..num_nodes {
                 let mut bb = [0u8; 32];
                 let v = i * num_nodes + j + p0;
                 bb[0..8].copy_from_slice(&v.to_be_bytes());
                 let node = Node::new(bb);
+                let node2 = SaplingNode::new(bb);
                 tree1.append(node).unwrap();
                 for w in ws.iter_mut() {
                     w.append(node).unwrap();
@@ -617,7 +658,7 @@ mod tests {
                     ws.push(w);
                     ws2.push(Witness::new(v, 0, None));
                 }
-                nodes.push(node);
+                nodes.push(node2);
             }
 
             bp.add_nodes(&mut nodes, &ws2);

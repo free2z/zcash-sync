@@ -1,3 +1,4 @@
+use crate::builder::SaplingDomain;
 use crate::chain::{Nf, NfRef};
 use crate::contact::Contact;
 use crate::prices::Quote;
@@ -5,15 +6,14 @@ use crate::taddr::derive_tkeys;
 use crate::transaction::TransactionInfo;
 use crate::{CTree, Witness};
 use rusqlite::{params, Connection, OptionalExtension, Transaction, NO_PARAMS};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use zcash_client_backend::encoding::decode_extended_full_viewing_key;
+use zcash_params::coin::{get_coin_chain, get_coin_id, CoinType};
 use zcash_primitives::consensus::{Network, NetworkUpgrade, Parameters};
 use zcash_primitives::merkle_tree::IncrementalWitness;
 use zcash_primitives::sapling::{Diversifier, Node, Note, Rseed, SaplingIvk};
 use zcash_primitives::zip32::{DiversifierIndex, ExtendedFullViewingKey};
-use serde::{Serialize, Deserialize};
-use zcash_params::coin::{CoinType, get_coin_chain, get_coin_id};
-use crate::builder::SaplingDomain;
 
 mod migration;
 
@@ -76,11 +76,12 @@ pub struct AccountBackup {
 impl DbAdapter {
     pub fn new(coin_type: CoinType, db_path: &str) -> anyhow::Result<DbAdapter> {
         let connection = Connection::open(db_path)?;
-        connection.query_row("PRAGMA journal_mode = WAL", NO_PARAMS, |_| {
-            Ok(())
-        })?;
+        connection.query_row("PRAGMA journal_mode = WAL", NO_PARAMS, |_| Ok(()))?;
         connection.execute("PRAGMA synchronous = NORMAL", NO_PARAMS)?;
-        Ok(DbAdapter { coin_type, connection })
+        Ok(DbAdapter {
+            coin_type,
+            connection,
+        })
     }
 
     pub fn begin_transaction(&mut self) -> anyhow::Result<Transaction> {
@@ -132,12 +133,14 @@ impl DbAdapter {
     }
 
     pub fn next_account_id(&self, seed: &str) -> anyhow::Result<i32> {
-        let index = self
-            .connection
-            .query_row("SELECT MAX(aindex) FROM accounts WHERE seed = ?1", [seed], |row| {
+        let index = self.connection.query_row(
+            "SELECT MAX(aindex) FROM accounts WHERE seed = ?1",
+            [seed],
+            |row| {
                 let aindex: Option<i32> = row.get(0)?;
                 Ok(aindex.unwrap_or(-1))
-            })? + 1;
+            },
+        )? + 1;
         Ok(index)
     }
 
@@ -192,10 +195,7 @@ impl DbAdapter {
             "DELETE FROM transactions WHERE height >= ?1",
             params![height],
         )?;
-        tx.execute(
-            "DELETE FROM messages WHERE height >= ?1",
-            params![height],
-        )?;
+        tx.execute("DELETE FROM messages WHERE height >= ?1", params![height])?;
         tx.commit()?;
 
         Ok(())
@@ -802,8 +802,7 @@ impl DbAdapter {
             .execute("DELETE FROM sapling_witnesses", NO_PARAMS)?;
         self.connection
             .execute("DELETE FROM transactions", NO_PARAMS)?;
-        self.connection
-            .execute("DELETE FROM messages", NO_PARAMS)?;
+        self.connection.execute("DELETE FROM messages", NO_PARAMS)?;
         Ok(())
     }
 
@@ -836,7 +835,10 @@ impl DbAdapter {
     }
 
     pub fn get_full_backup(&self) -> anyhow::Result<Vec<AccountBackup>> {
-        let _ = self.connection.execute("ALTER TABLE accounts ADD COLUMN aindex INT NOT NULL DEFAULT 0", NO_PARAMS); // ignore error
+        let _ = self.connection.execute(
+            "ALTER TABLE accounts ADD COLUMN aindex INT NOT NULL DEFAULT 0",
+            NO_PARAMS,
+        ); // ignore error
 
         let mut statement = self.connection.prepare(
             "SELECT name, seed, aindex, a.sk AS z_sk, ivk, a.address AS z_addr, t.sk as t_sk, t.address AS t_addr FROM accounts a LEFT JOIN taddrs t ON a.id_account = t.account")?;
@@ -879,8 +881,10 @@ impl DbAdapter {
                                             params![a.name, a.seed, a.index, a.z_sk, a.ivk, a.z_addr])?;
                     let id_account = self.connection.last_insert_rowid() as u32;
                     if let Some(t_addr) = &a.t_addr {
-                        self.connection.execute("INSERT INTO taddrs(account, sk, address) VALUES (?1,?2,?3)",
-                                                params![id_account, a.t_sk, t_addr])?;
+                        self.connection.execute(
+                            "INSERT INTO taddrs(account, sk, address) VALUES (?1,?2,?3)",
+                            params![id_account, a.t_sk, t_addr],
+                        )?;
                     }
                     Ok::<_, anyhow::Error>(())
                 };
@@ -900,14 +904,18 @@ impl DbAdapter {
     }
 
     pub fn mark_message_read(&self, message_id: u32, read: bool) -> anyhow::Result<()> {
-        self.connection.execute("UPDATE messages SET read = ?1 WHERE id = ?2",
-                                params![read, message_id])?;
+        self.connection.execute(
+            "UPDATE messages SET read = ?1 WHERE id = ?2",
+            params![read, message_id],
+        )?;
         Ok(())
     }
 
     pub fn mark_all_messages_read(&self, account: u32, read: bool) -> anyhow::Result<()> {
-        self.connection.execute("UPDATE messages SET read = ?1 WHERE account = ?2",
-                                params![read, account])?;
+        self.connection.execute(
+            "UPDATE messages SET read = ?1 WHERE account = ?2",
+            params![read, account],
+        )?;
         Ok(())
     }
 
@@ -918,8 +926,11 @@ impl DbAdapter {
 }
 
 fn get_coin_id_by_address(address: &str) -> u8 {
-    if address.starts_with("ys") { 1 }
-    else { 0 }
+    if address.starts_with("ys") {
+        1
+    } else {
+        0
+    }
 }
 
 pub struct ZMessage {
@@ -939,9 +950,9 @@ impl ZMessage {
 
 #[cfg(test)]
 mod tests {
-    use zcash_params::coin::CoinType;
     use crate::db::{DbAdapter, ReceivedNote, DEFAULT_DB_PATH};
     use crate::{CTree, Witness};
+    use zcash_params::coin::CoinType;
 
     #[test]
     fn test_db() {

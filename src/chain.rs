@@ -1,8 +1,9 @@
+use crate::advance_tree;
+use crate::builder::{Domain, IOBytes};
 use crate::commitment::{CTree, Witness};
 use crate::db::AccountViewKey;
 use crate::lw_rpc::compact_tx_streamer_client::CompactTxStreamerClient;
 use crate::lw_rpc::*;
-use crate::advance_tree;
 use ff::PrimeField;
 use log::info;
 use rayon::prelude::*;
@@ -13,14 +14,15 @@ use thiserror::Error;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig};
 use tonic::Request;
 use zcash_note_encryption::batch::try_compact_note_decryption;
+use zcash_note_encryption::{
+    Domain as EncDomain, EphemeralKeyBytes, ShieldedOutput, COMPACT_NOTE_SIZE,
+};
 use zcash_primitives::consensus::{BlockHeight, Network, NetworkUpgrade, Parameters};
 use zcash_primitives::merkle_tree::{CommitmentTree, IncrementalWitness};
 use zcash_primitives::sapling::note_encryption::SaplingDomain;
 use zcash_primitives::sapling::{Node, Note, PaymentAddress};
 use zcash_primitives::transaction::components::sapling::CompactOutputDescription;
 use zcash_primitives::zip32::ExtendedFullViewingKey;
-use zcash_note_encryption::{COMPACT_NOTE_SIZE, Domain as EncDomain, EphemeralKeyBytes, ShieldedOutput};
-use crate::builder::{Domain, IOBytes};
 
 const MAX_CHUNK: u32 = 50000;
 
@@ -33,33 +35,51 @@ pub async fn get_latest_height(
     Ok(block_id.height as u32)
 }
 
-pub async fn get_activation_date(network: &Network, client: &mut CompactTxStreamerClient<Channel>) -> anyhow::Result<u32> {
+pub async fn get_activation_date(
+    network: &Network,
+    client: &mut CompactTxStreamerClient<Channel>,
+) -> anyhow::Result<u32> {
     let height = network.activation_height(NetworkUpgrade::Sapling).unwrap();
     let time = get_block_date(client, u32::from(height)).await?;
     Ok(time)
 }
 
-pub async fn get_block_date(client: &mut CompactTxStreamerClient<Channel>, height: u32) -> anyhow::Result<u32> {
-    let block = client.get_block(Request::new(BlockId { height: height as u64, hash: vec![] })).await?.into_inner();
+pub async fn get_block_date(
+    client: &mut CompactTxStreamerClient<Channel>,
+    height: u32,
+) -> anyhow::Result<u32> {
+    let block = client
+        .get_block(Request::new(BlockId {
+            height: height as u64,
+            hash: vec![],
+        }))
+        .await?
+        .into_inner();
     Ok(block.time)
 }
 
-pub async fn get_block_by_time(network: &Network, client: &mut CompactTxStreamerClient<Channel>, time: u32) -> anyhow::Result<u32> {
+pub async fn get_block_by_time(
+    network: &Network,
+    client: &mut CompactTxStreamerClient<Channel>,
+    time: u32,
+) -> anyhow::Result<u32> {
     let mut start = u32::from(network.activation_height(NetworkUpgrade::Sapling).unwrap());
     let mut end = get_latest_height(client).await?;
-    if time <= get_block_date(client, start).await? { return Ok(0); }
-    if time >= get_block_date(client, end).await? { return Ok(end); }
+    if time <= get_block_date(client, start).await? {
+        return Ok(0);
+    }
+    if time >= get_block_date(client, end).await? {
+        return Ok(end);
+    }
     let mut block_mid;
     while end - start >= 1000 {
         block_mid = (start + end) / 2;
         let mid = get_block_date(client, block_mid).await?;
         if time < mid {
             end = block_mid - 1;
-        }
-        else if time > mid {
+        } else if time > mid {
             start = block_mid + 1;
-        }
-        else {
+        } else {
             return Ok(block_mid);
         }
     }
@@ -178,8 +198,14 @@ struct AccountOutput<'a, N: Parameters> {
     _phantom: PhantomData<N>,
 }
 
-impl <'a, N: Parameters> AccountOutput<'a, N> {
-    fn new(tx_index: usize, output_index: usize, block_output_index: usize, vtx: &'a CompactTx, co: &CompactOutput) -> Self {
+impl<'a, N: Parameters> AccountOutput<'a, N> {
+    fn new(
+        tx_index: usize,
+        output_index: usize,
+        block_output_index: usize,
+        vtx: &'a CompactTx,
+        co: &CompactOutput,
+    ) -> Self {
         let mut epk_bytes = [0u8; 32];
         epk_bytes.copy_from_slice(&co.epk);
         let epk = EphemeralKeyBytes::from(epk_bytes);
@@ -202,7 +228,9 @@ impl <'a, N: Parameters> AccountOutput<'a, N> {
     }
 }
 
-impl <'a, N: Parameters> ShieldedOutput<SaplingDomain<N>, COMPACT_NOTE_SIZE> for AccountOutput<'a, N> {
+impl<'a, N: Parameters> ShieldedOutput<SaplingDomain<N>, COMPACT_NOTE_SIZE>
+    for AccountOutput<'a, N>
+{
     fn ephemeral_key(&self) -> EphemeralKeyBytes {
         self.epk.clone()
     }
@@ -236,7 +264,8 @@ fn decrypt_notes<'a, N: Parameters>(
 
         for (output_index, co) in vtx.outputs.iter().enumerate() {
             let domain = SaplingDomain::<N>::for_height(network.clone(), height);
-            let output = AccountOutput::<N>::new(tx_index, output_index, count_outputs as usize, vtx, co);
+            let output =
+                AccountOutput::<N>::new(tx_index, output_index, count_outputs as usize, vtx, co);
             outputs.push((domain, output));
 
             // let od = to_output_description(co);
@@ -265,8 +294,8 @@ fn decrypt_notes<'a, N: Parameters>(
     }
 
     let start = Instant::now();
-    let notes_decrypted = try_compact_note_decryption::<SaplingDomain<N>, AccountOutput<N>>
-        (&vvks, &outputs);
+    let notes_decrypted =
+        try_compact_note_decryption::<SaplingDomain<N>, AccountOutput<N>>(&vvks, &outputs);
     let elapsed = start.elapsed().as_millis() as usize;
 
     for (pos, opt_note) in notes_decrypted.iter().enumerate() {
@@ -303,7 +332,11 @@ impl DecryptNode {
         DecryptNode { vks }
     }
 
-    pub fn decrypt_blocks<'a>(&self, network: &Network, blocks: &'a [CompactBlock]) -> Vec<DecryptedBlock<'a>> {
+    pub fn decrypt_blocks<'a>(
+        &self,
+        network: &Network,
+        blocks: &'a [CompactBlock],
+    ) -> Vec<DecryptedBlock<'a>> {
         let vks: Vec<_> = self.vks.iter().collect();
         let mut decrypted_blocks: Vec<DecryptedBlock> = blocks
             .par_iter()
@@ -372,7 +405,10 @@ fn calculate_tree_state_v1(
     witnesses
 }
 
-pub fn calculate_tree_state_v2<D: Domain>(cbs: &[CompactBlock], blocks: &[DecryptedBlock]) -> Vec<Witness<D>> {
+pub fn calculate_tree_state_v2<D: Domain>(
+    cbs: &[CompactBlock],
+    blocks: &[DecryptedBlock],
+) -> Vec<Witness<D>> {
     let mut p = 0usize;
     let mut nodes: Vec<D::Node> = vec![];
     let mut positions: Vec<usize> = vec![];
@@ -431,7 +467,11 @@ pub async fn connect_lightwalletd(url: &str) -> anyhow::Result<CompactTxStreamer
     Ok(client)
 }
 
-pub async fn sync(network: &Network, vks: HashMap<u32, AccountViewKey>, ld_url: &str) -> anyhow::Result<()> {
+pub async fn sync(
+    network: &Network,
+    vks: HashMap<u32, AccountViewKey>,
+    ld_url: &str,
+) -> anyhow::Result<()> {
     let decrypter = DecryptNode::new(vks);
     let mut client = connect_lightwalletd(ld_url).await?;
     let start_height: u32 = network
@@ -466,6 +506,7 @@ pub async fn sync(network: &Network, vks: HashMap<u32, AccountViewKey>, ld_url: 
 
 #[cfg(test)]
 mod tests {
+    use crate::builder::SaplingDomain;
     #[allow(unused_imports)]
     use crate::chain::{
         calculate_tree_state_v1, calculate_tree_state_v2, download_chain, get_latest_height,
@@ -479,7 +520,6 @@ mod tests {
     use std::time::Instant;
     use zcash_client_backend::encoding::decode_extended_full_viewing_key;
     use zcash_primitives::consensus::{Network, NetworkUpgrade, Parameters};
-    use crate::builder::SaplingDomain;
 
     const NETWORK: &Network = &Network::MainNetwork;
 

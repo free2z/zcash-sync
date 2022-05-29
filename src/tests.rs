@@ -1,22 +1,22 @@
-use std::time::Instant;
+use crate::builder::{BlockProcessor, IOBytes};
+use crate::orchard::{OrchardDomain, OrchardHash, OrchardHasher};
+use crate::{CTree, Witness, ORCHARD_ROOTS};
 use ff::{Field, PrimeField};
+use group::GroupEncoding;
 use group::{Curve, Group};
 use halo2_gadgets::sinsemilla::primitives::SINSEMILLA_S;
-use pasta_curves::arithmetic::{CurveAffine, CurveExt};
-use pasta_curves::pallas;
-use pasta_curves::pallas::{Point, Affine};
-use orchard::tree::MerkleHashOrchard;
-use zcash_primitives::merkle_tree::Hashable;
-use group::GroupEncoding;
 use incrementalmerkletree::bridgetree::BridgeTree;
 use incrementalmerkletree::Tree;
+use orchard::tree::MerkleHashOrchard;
+use orchard::Anchor;
+use pasta_curves::arithmetic::{CurveAffine, CurveExt};
+use pasta_curves::pallas;
+use pasta_curves::pallas::{Affine, Point};
 use rand::rngs::OsRng;
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
-use orchard::Anchor;
-use crate::builder::{BlockProcessor, IOBytes};
-use crate::{CTree, ORCHARD_ROOTS, Witness};
-use crate::orchard::{OrchardDomain, OrchardHash, OrchardHasher};
+use std::time::Instant;
+use zcash_primitives::merkle_tree::Hashable;
 
 fn make_test_data() -> Vec<([u8; 32], [u8; 32])> {
     let mut rng = ChaChaRng::seed_from_u64(0);

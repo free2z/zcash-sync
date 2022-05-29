@@ -3,7 +3,7 @@
 #[path = "generated/cash.z.wallet.sdk.rpc.rs"]
 pub mod lw_rpc;
 
-pub use zcash_params::coin::{CoinType, get_coin_type, get_branch};
+pub use zcash_params::coin::{get_branch, get_coin_type, CoinType};
 
 // Mainnet
 // pub const LWD_URL: &str = "https://mainnet.lightwalletd.com:9067";
@@ -22,12 +22,12 @@ pub const LWD_URL: &str = "http://127.0.0.1:9067";
 mod builder;
 mod chain;
 mod commitment;
-mod orchard;
 mod contact;
 mod db;
 mod hash;
 mod key;
 mod mempool;
+mod orchard;
 mod pay;
 mod prices;
 mod print;
@@ -42,7 +42,12 @@ mod ledger;
 
 #[cfg(not(feature = "ledger"))]
 mod ledger {
-    pub async fn build_tx_ledger(_tx: &mut super::pay::Tx, _prover: &impl zcash_primitives::sapling::prover::TxProver) -> anyhow::Result<Vec<u8>> { unreachable!() }
+    pub async fn build_tx_ledger(
+        _tx: &mut super::pay::Tx,
+        _prover: &impl zcash_primitives::sapling::prover::TxProver,
+    ) -> anyhow::Result<Vec<u8>> {
+        unreachable!()
+    }
 }
 
 pub fn hex_to_hash(hex: &str) -> anyhow::Result<[u8; 32]> {
@@ -51,7 +56,7 @@ pub fn hex_to_hash(hex: &str) -> anyhow::Result<[u8; 32]> {
     Ok(hash)
 }
 
-pub use crate::builder::{SaplingDomain, SaplingNode, advance_tree};
+pub use crate::builder::{advance_tree, SaplingDomain, SaplingNode};
 pub use crate::chain::{
     calculate_tree_state_v2, connect_lightwalletd, download_chain, get_latest_height, sync,
     ChainError, DecryptNode,
@@ -59,7 +64,8 @@ pub use crate::chain::{
 pub use crate::commitment::{CTree, Witness};
 pub use crate::db::DbAdapter;
 pub use crate::hash::pedersen_hash;
-pub use crate::key::{KeyHelpers, generate_random_enc_key};
+pub use crate::key::{generate_random_enc_key, KeyHelpers};
+pub use crate::ledger::build_tx_ledger;
 pub use crate::lw_rpc::compact_tx_streamer_client::CompactTxStreamerClient;
 pub use crate::lw_rpc::*;
 pub use crate::mempool::MemPool;
@@ -67,10 +73,9 @@ pub use crate::pay::{broadcast_tx, Tx, TxIn, TxOut};
 pub use crate::print::*;
 pub use crate::scan::{latest_height, scan_all, sync_async};
 pub use crate::ua::{get_sapling, get_ua};
-pub use crate::wallet::{RecipientMemo, Wallet, WalletBalance, encrypt_backup, decrypt_backup};
-pub use crate::ledger::build_tx_ledger;
+pub use crate::wallet::{decrypt_backup, encrypt_backup, RecipientMemo, Wallet, WalletBalance};
 
 mod tests;
 
-pub use tests::{test_pedersen_hash, test_empty_tree};
 pub use crate::orchard::ORCHARD_ROOTS;
+pub use tests::{test_empty_tree, test_pedersen_hash};

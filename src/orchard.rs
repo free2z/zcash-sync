@@ -1,12 +1,12 @@
 #![allow(non_snake_case)]
-use std::io::{Read, Write};
+use crate::builder::{Domain, IOBytes};
 use ff::PrimeField;
 use group::Curve;
 use halo2_gadgets::sinsemilla::primitives::SINSEMILLA_S;
 use lazy_static::lazy_static;
 use pasta_curves::arithmetic::{CurveAffine, CurveExt};
 use pasta_curves::pallas::{self, Affine, Point};
-use crate::builder::{Domain, IOBytes};
+use std::io::{Read, Write};
 
 lazy_static! {
     static ref ORCHARD_HASHER: OrchardHasher = OrchardHasher::new();
@@ -60,10 +60,9 @@ pub struct OrchardHasher {
 
 impl OrchardHasher {
     pub fn new() -> Self {
-        let Q: Point = Point::hash_to_curve(Q_PERSONALIZATION)(MERKLE_CRH_PERSONALIZATION.as_bytes());
-        OrchardHasher {
-            Q
-        }
+        let Q: Point =
+            Point::hash_to_curve(Q_PERSONALIZATION)(MERKLE_CRH_PERSONALIZATION.as_bytes());
+        OrchardHasher { Q }
     }
 
     pub fn hash_combine(&self, depth: u8, left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
@@ -77,7 +76,8 @@ impl OrchardHasher {
         let mut left = left.clone();
         let mut right = right.clone();
         left[31] |= (right[0] & 1) << 7; // move the first bit of right into 256th of left
-        for i in 0..32 { // move by 1 bit to fill the missing 256th bit of left
+        for i in 0..32 {
+            // move by 1 bit to fill the missing 256th bit of left
             let carry = if i < 31 { (right[i + 1] & 1) << 7 } else { 0 };
             right[i] = right[i] >> 1 | carry;
         }
@@ -104,7 +104,8 @@ impl OrchardHasher {
             }
         }
 
-        let p = acc.to_affine()
+        let p = acc
+            .to_affine()
             .coordinates()
             .map(|c| *c.x())
             .unwrap_or_else(pallas::Base::zero);
@@ -122,4 +123,3 @@ impl OrchardHasher {
         roots
     }
 }
-

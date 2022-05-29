@@ -48,7 +48,11 @@ pub async fn get_utxos(
     }
 }
 
-pub fn derive_tkeys(network: &Network, phrase: &str, path: &str) -> anyhow::Result<(String, String)> {
+pub fn derive_tkeys(
+    network: &Network,
+    phrase: &str,
+    path: &str,
+) -> anyhow::Result<(String, String)> {
     let mnemonic = Mnemonic::from_phrase(&phrase, Language::English)?;
     let seed = Seed::new(&mnemonic, "");
     let secp = Secp256k1::<All>::new();

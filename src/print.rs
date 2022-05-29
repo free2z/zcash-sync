@@ -1,7 +1,7 @@
+use crate::builder::{Domain, SaplingDomain};
 use crate::{CTree, Witness};
 use zcash_primitives::merkle_tree::{CommitmentTree, IncrementalWitness};
 use zcash_primitives::sapling::Node;
-use crate::builder::{Domain, SaplingDomain};
 
 #[allow(dead_code)]
 pub fn print_node(n: &Node) {

@@ -1,12 +1,21 @@
+use crate::chain::{get_activation_date, get_block_by_time};
 use crate::contact::{serialize_contacts, Contact};
+use crate::db::{AccountBackup, ZMessage};
 use crate::key::KeyHelpers;
 use crate::pay::Tx;
 use crate::pay::TxBuilder;
 use crate::prices::fetch_historical_prices;
 use crate::scan::ProgressCallback;
 use crate::taddr::{get_taddr_balance, get_utxos};
-use crate::{broadcast_tx, connect_lightwalletd, get_latest_height, BlockId, CTree, DbAdapter, build_tx_ledger, CompactTxStreamerClient};
+use crate::{
+    broadcast_tx, build_tx_ledger, connect_lightwalletd, get_latest_height, BlockId, CTree,
+    CompactTxStreamerClient, DbAdapter,
+};
+use anyhow::anyhow;
+use bech32::FromBase32;
 use bip39::{Language, Mnemonic};
+use chacha20poly1305::aead::{Aead, NewAead};
+use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use lazycell::AtomicLazyCell;
 use rand::rngs::OsRng;
 use rand::RngCore;
@@ -17,27 +26,21 @@ use std::convert::TryFrom;
 use std::fs::File;
 use std::str::FromStr;
 use std::sync::Arc;
-use anyhow::anyhow;
-use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
-use chacha20poly1305::aead::{Aead, NewAead};
-use bech32::FromBase32;
 use tokio::sync::Mutex;
-use tonic::Request;
 use tonic::transport::Channel;
+use tonic::Request;
 use zcash_client_backend::address::RecipientAddress;
 use zcash_client_backend::encoding::{
     decode_extended_full_viewing_key, decode_extended_spending_key, encode_payment_address,
 };
 use zcash_client_backend::zip321::{Payment, TransactionRequest};
+use zcash_params::coin::{get_coin_chain, CoinChain, CoinType};
 use zcash_params::{OUTPUT_PARAMS, SPEND_PARAMS};
 use zcash_primitives::consensus::{Network, Parameters};
 use zcash_primitives::memo::Memo;
 use zcash_primitives::transaction::builder::Progress;
 use zcash_primitives::transaction::components::Amount;
 use zcash_proofs::prover::LocalTxProver;
-use zcash_params::coin::{CoinChain, CoinType, get_coin_chain};
-use crate::chain::{get_activation_date, get_block_by_time};
-use crate::db::{AccountBackup, ZMessage};
 
 const DEFAULT_CHUNK_SIZE: u32 = 100_000;
 
@@ -93,8 +96,7 @@ impl RecipientMemo {
     fn from_recipient(from: &str, r: &Recipient) -> Self {
         let memo = if !r.reply_to && r.subject.is_empty() {
             r.memo.clone()
-        }
-        else {
+        } else {
             encode_memo(from, r.reply_to, &r.subject, &r.memo)
         };
         RecipientMemo {
@@ -116,15 +118,18 @@ pub fn decode_memo(memo: &str, recipient: &str, timestamp: u32, height: u32) -> 
     let memo_lines: Vec<_> = memo.splitn(4, '\n').collect();
     let msg = if memo_lines[0] == "\u{1F6E1}MSG" {
         ZMessage {
-            sender: if memo_lines[1].is_empty() { None } else { Some(memo_lines[1].to_string()) },
+            sender: if memo_lines[1].is_empty() {
+                None
+            } else {
+                Some(memo_lines[1].to_string())
+            },
             recipient: recipient.to_string(),
             subject: memo_lines[2].to_string(),
             body: memo_lines[3].to_string(),
             timestamp,
             height,
         }
-    }
-    else {
+    } else {
         ZMessage {
             sender: None,
             recipient: recipient.to_string(),
@@ -152,7 +157,7 @@ impl Wallet {
         }
     }
 
-    pub fn reset_db(&self)  -> anyhow::Result<()> {
+    pub fn reset_db(&self) -> anyhow::Result<()> {
         self.db.reset_db()
     }
 
@@ -198,9 +203,9 @@ impl Wallet {
 
     pub fn new_account_with_key(&self, name: &str, key: &str, index: u32) -> anyhow::Result<i32> {
         let (seed, sk, ivk, pa) = self.key_helpers.decode_key(key, index)?;
-        let account = self
-            .db
-            .store_account(name, seed.as_deref(), index, sk.as_deref(), &ivk, &pa)?;
+        let account =
+            self.db
+                .store_account(name, seed.as_deref(), index, sk.as_deref(), &ivk, &pa)?;
         if account > 0 {
             self.db.create_taddr(account as u32)?;
         }
@@ -254,7 +259,16 @@ impl Wallet {
             ld_url,
         )
         .await?;
-        Self::scan_async(coin_type, get_tx, db_path, DEFAULT_CHUNK_SIZE, 0, cb.clone(), ld_url).await?;
+        Self::scan_async(
+            coin_type,
+            get_tx,
+            db_path,
+            DEFAULT_CHUNK_SIZE,
+            0,
+            cb.clone(),
+            ld_url,
+        )
+        .await?;
         Ok(())
     }
 
@@ -282,7 +296,11 @@ impl Wallet {
         Ok(())
     }
 
-    async fn store_tree_state(&self, client: &mut CompactTxStreamerClient<Channel>, height: u32) -> anyhow::Result<()> {
+    async fn store_tree_state(
+        &self,
+        client: &mut CompactTxStreamerClient<Channel>,
+        height: u32,
+    ) -> anyhow::Result<()> {
         let block_id = BlockId {
             height: height as u64,
             hash: vec![],
@@ -316,10 +334,12 @@ impl Wallet {
         let mut tx_builder = TxBuilder::new(self.db.coin_type, last_height);
 
         let fvk = self.db.get_ivk(account)?;
-        let fvk =
-            decode_extended_full_viewing_key(self.network().hrp_sapling_extended_full_viewing_key(), &fvk)
-                .unwrap()
-                .unwrap();
+        let fvk = decode_extended_full_viewing_key(
+            self.network().hrp_sapling_extended_full_viewing_key(),
+            &fvk,
+        )
+        .unwrap()
+        .unwrap();
         let utxos = if use_transparent {
             let mut client = connect_lightwalletd(&self.ld_url).await?;
             get_utxos(&mut client, &self.db, account).await?
@@ -347,9 +367,10 @@ impl Wallet {
             .db
             .get_tsk(account)?
             .map(|tsk| SecretKey::from_str(&tsk).unwrap());
-        let extsk = decode_extended_spending_key(self.network().hrp_sapling_extended_spending_key(), &zsk)
-            .unwrap()
-            .unwrap();
+        let extsk =
+            decode_extended_spending_key(self.network().hrp_sapling_extended_spending_key(), &zsk)
+                .unwrap()
+                .unwrap();
         let prover = self
             .prover
             .borrow()
@@ -569,7 +590,12 @@ impl Wallet {
         self.db.truncate_data()
     }
 
-    pub fn make_payment_uri(&self, address: &str, amount: u64, memo: &str) -> anyhow::Result<String> {
+    pub fn make_payment_uri(
+        &self,
+        address: &str,
+        amount: u64,
+        memo: &str,
+    ) -> anyhow::Result<String> {
         let addr = RecipientAddress::decode(self.network(), address)
             .ok_or_else(|| anyhow::anyhow!("Invalid address"))?;
         let payment = Payment {
@@ -631,24 +657,33 @@ impl Wallet {
         self.db.restore_full_backup(accounts)
     }
 
-    pub fn store_share_secret(&self, account: u32, secret: &str, index: usize, threshold: usize, participants: usize) -> anyhow::Result<()> {
-        self.db.store_share_secret(
-            account,
-            secret,
-            index,
-            threshold,
-            participants,
-        )
+    pub fn store_share_secret(
+        &self,
+        account: u32,
+        secret: &str,
+        index: usize,
+        threshold: usize,
+        participants: usize,
+    ) -> anyhow::Result<()> {
+        self.db
+            .store_share_secret(account, secret, index, threshold, participants)
     }
 
     pub fn get_share_secret(&self, account: u32) -> anyhow::Result<String> {
         self.db.get_share_secret(account)
     }
 
-    pub fn parse_recipients(&self, account: u32, recipients: &str) -> anyhow::Result<Vec<RecipientMemo>> {
+    pub fn parse_recipients(
+        &self,
+        account: u32,
+        recipients: &str,
+    ) -> anyhow::Result<Vec<RecipientMemo>> {
         let address = self.db.get_address(account)?;
         let recipients: Vec<Recipient> = serde_json::from_str(recipients)?;
-        let recipient_memos: Vec<_> = recipients.iter().map(|r| RecipientMemo::from_recipient(&address, r)).collect();
+        let recipient_memos: Vec<_> = recipients
+            .iter()
+            .map(|r| RecipientMemo::from_recipient(&address, r))
+            .collect();
         Ok(recipient_memos)
     }
 
@@ -673,26 +708,33 @@ impl Wallet {
         Ok(date_time)
     }
 
-    fn chain(&self) -> &dyn CoinChain { get_coin_chain(self.coin_type) }
-    fn network(&self) -> &Network { self.chain().network() }
+    fn chain(&self) -> &dyn CoinChain {
+        get_coin_chain(self.coin_type)
+    }
+    fn network(&self) -> &Network {
+        self.chain().network()
+    }
 }
 
-const NONCE: &'static[u8; 12] = b"unique nonce";
+const NONCE: &'static [u8; 12] = b"unique nonce";
 
 pub fn encrypt_backup(accounts: &[AccountBackup], key: &str) -> anyhow::Result<String> {
     let accounts_bin = bincode::serialize(&accounts)?;
     let backup = if !key.is_empty() {
         let (hrp, key, _) = bech32::decode(key)?;
-        if hrp != "zwk" { anyhow::bail!("Invalid backup key") }
+        if hrp != "zwk" {
+            anyhow::bail!("Invalid backup key")
+        }
         let key = Vec::<u8>::from_base32(&key)?;
         let key = Key::from_slice(&key);
 
         let cipher = ChaCha20Poly1305::new(key);
         // nonce is constant because we always use a different key!
-        let cipher_text = cipher.encrypt(Nonce::from_slice(NONCE), &*accounts_bin).map_err(|_e| anyhow::anyhow!("Failed to encrypt backup"))?;
+        let cipher_text = cipher
+            .encrypt(Nonce::from_slice(NONCE), &*accounts_bin)
+            .map_err(|_e| anyhow::anyhow!("Failed to encrypt backup"))?;
         base64::encode(cipher_text)
-    }
-    else {
+    } else {
         base64::encode(accounts_bin)
     };
     Ok(backup)
@@ -701,15 +743,18 @@ pub fn encrypt_backup(accounts: &[AccountBackup], key: &str) -> anyhow::Result<S
 pub fn decrypt_backup(key: &str, backup: &str) -> anyhow::Result<Vec<AccountBackup>> {
     let backup = if !key.is_empty() {
         let (hrp, key, _) = bech32::decode(key)?;
-        if hrp != "zwk" { anyhow::bail!("Not a valid decryption key"); }
+        if hrp != "zwk" {
+            anyhow::bail!("Not a valid decryption key");
+        }
         let key = Vec::<u8>::from_base32(&key)?;
         let key = Key::from_slice(&key);
 
         let cipher = ChaCha20Poly1305::new(key);
         let backup = base64::decode(backup)?;
-        cipher.decrypt(Nonce::from_slice(NONCE), &*backup).map_err(|_e| anyhow::anyhow!("Failed to decrypt backup"))?
-    }
-    else {
+        cipher
+            .decrypt(Nonce::from_slice(NONCE), &*backup)
+            .map_err(|_e| anyhow::anyhow!("Failed to decrypt backup"))?
+    } else {
         base64::decode(backup)?
     };
 
@@ -750,8 +795,9 @@ mod tests {
 
         let seed = dotenv::var("SEED").unwrap();
         let kh = KeyHelpers::new(CoinType::Zcash);
-        let (sk, vk, pa) =
-            kh.derive_secret_key(&Mnemonic::from_phrase(&seed, Language::English).unwrap(), 0).unwrap();
+        let (sk, vk, pa) = kh
+            .derive_secret_key(&Mnemonic::from_phrase(&seed, Language::English).unwrap(), 0)
+            .unwrap();
         println!("{} {} {}", sk, vk, pa);
         // let wallet = Wallet::new("zec.db");
         //

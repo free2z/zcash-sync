@@ -1,5 +1,5 @@
 use std::time::Instant;
-use sync::{advance_tree, scan_all, CTree, Witness, SaplingDomain, SaplingNode};
+use sync::{advance_tree, scan_all, CTree, SaplingDomain, SaplingNode, Witness};
 use zcash_client_backend::encoding::decode_extended_full_viewing_key;
 use zcash_primitives::consensus::{Network, Parameters};
 use zcash_primitives::merkle_tree::{CommitmentTree, IncrementalWitness};

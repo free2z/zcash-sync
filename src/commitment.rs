@@ -1,10 +1,10 @@
+use crate::builder::{Domain, IOBytes, SaplingDomain, SaplingNode};
 use crate::chain::DecryptedNote;
 use byteorder::WriteBytesExt;
 use std::io::{Read, Write};
+use zcash_encoding::{Optional, Vector};
 use zcash_primitives::merkle_tree::{CommitmentTree, Hashable};
 use zcash_primitives::sapling::Node;
-use zcash_encoding::{Optional, Vector};
-use crate::builder::{Domain, IOBytes, SaplingDomain, SaplingNode};
 
 /*
 Same behavior and structure as CommitmentTree<Node> from librustzcash
@@ -89,7 +89,7 @@ pub struct Witness<D: Domain> {
     pub note: Option<DecryptedNote>,
 }
 
-impl <D: Domain> Witness<D> {
+impl<D: Domain> Witness<D> {
     pub fn new(position: usize, id_note: u32, note: Option<DecryptedNote>) -> Witness<D> {
         Witness {
             position,
@@ -107,12 +107,10 @@ impl <D: Domain> Witness<D> {
         let mut next_filler = move |depth: usize| {
             if let Some(f) = filled_iter.next() {
                 f.clone()
-            }
-            else if !cursor_used {
+            } else if !cursor_used {
                 cursor_used = true;
                 self.cursor.root(depth, empty_roots)
-            }
-            else {
+            } else {
                 empty_roots[depth]
             }
         };
@@ -121,20 +119,20 @@ impl <D: Domain> Witness<D> {
         if let Some(left) = self.tree.left {
             if self.tree.right.is_some() {
                 auth_path.push(left);
-            }
-            else {
+            } else {
                 auth_path.push(next_filler(0));
             }
         }
         for i in 1..height {
-            let p = if i-1 < self.tree.parents.len() {
-                self.tree.parents[i-1]
-            } else { None };
+            let p = if i - 1 < self.tree.parents.len() {
+                self.tree.parents[i - 1]
+            } else {
+                None
+            };
 
             if let Some(node) = p {
                 auth_path.push(node);
-            }
-            else {
+            } else {
                 auth_path.push(next_filler(i));
             }
         }
@@ -174,7 +172,7 @@ impl Witness<SaplingDomain> {
     }
 }
 
-impl <D: Domain> CTree<D> {
+impl<D: Domain> CTree<D> {
     pub fn new() -> CTree<D> {
         CTree {
             left: None,
@@ -246,8 +244,7 @@ impl <D: Domain> CTree<D> {
         for p in self.parents.iter() {
             if let Some(ref left) = p {
                 cur = D::node_combine(depth, &left, &cur);
-            }
-            else {
+            } else {
                 cur = D::node_combine(depth, &cur, &empty_roots[depth]);
             }
             depth += 1;

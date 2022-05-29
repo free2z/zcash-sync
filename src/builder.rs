@@ -1,5 +1,3 @@
-use std::io::{Read, Write};
-use std::marker::PhantomData;
 use crate::commitment::{CTree, Witness};
 use crate::hash::{pedersen_hash, pedersen_hash_inner};
 use ff::PrimeField;
@@ -7,6 +5,8 @@ use group::Curve;
 use jubjub::{AffinePoint, ExtendedPoint};
 use rayon::prelude::IntoParallelIterator;
 use rayon::prelude::*;
+use std::io::{Read, Write};
+use std::marker::PhantomData;
 use zcash_primitives::merkle_tree::HashSer;
 use zcash_primitives::sapling::Note;
 
@@ -86,7 +86,7 @@ struct CTreeBuilder<D: Domain> {
     first_block: bool,
 }
 
-impl <D: Domain> Builder<D> for CTreeBuilder<D> {
+impl<D: Domain> Builder<D> for CTreeBuilder<D> {
     type Context = ();
     type Output = CTree<D>;
 
@@ -172,7 +172,7 @@ impl <D: Domain> Builder<D> for CTreeBuilder<D> {
     }
 }
 
-impl <D: Domain> CTreeBuilder<D> {
+impl<D: Domain> CTreeBuilder<D> {
     fn new(prev_tree: &CTree<D>, len: usize, first_block: bool) -> Self {
         let start = prev_tree.get_position();
         CTreeBuilder {
@@ -206,7 +206,11 @@ impl <D: Domain> CTreeBuilder<D> {
     }
 
     #[inline(always)]
-    fn get<'a>(commitments: &'a [D::Node], index: usize, offset: &'a Option<D::Node>) -> &'a D::Node {
+    fn get<'a>(
+        commitments: &'a [D::Node],
+        index: usize,
+        offset: &'a Option<D::Node>,
+    ) -> &'a D::Node {
         Self::get_opt(commitments, index, offset).unwrap()
     }
 
@@ -219,22 +223,25 @@ impl <D: Domain> CTreeBuilder<D> {
     }
 }
 
-fn combine_level<D: Domain>(commitments: &mut [D::Node], offset: Option<D::Node>, n: usize, depth: usize) -> usize {
+fn combine_level<D: Domain>(
+    commitments: &mut [D::Node],
+    offset: Option<D::Node>,
+    n: usize,
+    depth: usize,
+) -> usize {
     assert_eq!(n % 2, 0);
 
     let nn = n / 2;
-    let next_level: Vec<_> =
-        (0..nn)
-            .into_par_iter()
-            .map(|i| {
-                D::node_combine(
-                    depth,
-                    CTreeBuilder::<D>::get(commitments, 2 * i, &offset),
-                    CTreeBuilder::<D>::get(commitments, 2 * i + 1, &offset),
-                )
-            })
-            .collect();
-
+    let next_level: Vec<_> = (0..nn)
+        .into_par_iter()
+        .map(|i| {
+            D::node_combine(
+                depth,
+                CTreeBuilder::<D>::get(commitments, 2 * i, &offset),
+                CTreeBuilder::<D>::get(commitments, 2 * i + 1, &offset),
+            )
+        })
+        .collect();
 
     commitments[0..nn].copy_from_slice(&next_level);
     nn
@@ -247,7 +254,7 @@ struct WitnessBuilder<D: Domain> {
     _phantom: PhantomData<D>,
 }
 
-impl <D: Domain> WitnessBuilder<D> {
+impl<D: Domain> WitnessBuilder<D> {
     fn new(tree_builder: &CTreeBuilder<D>, prev_witness: &Witness<D>, count: usize) -> Self {
         let position = prev_witness.position;
         let inside = position >= tree_builder.start && position < tree_builder.start + count;
@@ -260,7 +267,7 @@ impl <D: Domain> WitnessBuilder<D> {
     }
 }
 
-impl <D: Domain> Builder<D> for WitnessBuilder<D> {
+impl<D: Domain> Builder<D> for WitnessBuilder<D> {
     type Context = CTreeBuilder<D>;
     type Output = Witness<D>;
 
@@ -305,7 +312,8 @@ impl <D: Domain> Builder<D> for WitnessBuilder<D> {
         // println!("P {} P1 {} S {} AS {}", self.p, p1, context.start, context.adjusted_start(&right));
         let has_p1 = p1 >= context.adjusted_start(&right) && p1 < context.start + commitments.len();
         if has_p1 {
-            let p1 = CTreeBuilder::<D>::get(commitments, p1 - context.adjusted_start(&right), &right);
+            let p1 =
+                CTreeBuilder::<D>::get(commitments, p1 - context.adjusted_start(&right), &right);
             if depth == 0 {
                 if tree.right.is_none() {
                     self.witness.filled.push(*p1);
@@ -407,7 +415,7 @@ pub struct BlockProcessor<D: Domain> {
     first_block: bool,
 }
 
-impl <D: Domain> BlockProcessor<D> {
+impl<D: Domain> BlockProcessor<D> {
     pub fn new(prev_tree: &CTree<D>, prev_witnesses: &[Witness<D>]) -> BlockProcessor<D> {
         BlockProcessor {
             prev_tree: prev_tree.clone(),
@@ -445,7 +453,9 @@ impl <D: Domain> BlockProcessor<D> {
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
-    use crate::builder::{advance_tree, BlockProcessor, Domain, IOBytes, SaplingDomain, SaplingNode};
+    use crate::builder::{
+        advance_tree, BlockProcessor, Domain, IOBytes, SaplingDomain, SaplingNode,
+    };
     use crate::chain::DecryptedNote;
     use crate::commitment::{CTree, Witness};
     use crate::print::{print_ctree, print_tree, print_witness, print_witness2};

@@ -19,6 +19,7 @@ pub const LWD_URL: &str = "https://mainnet.lightwalletd.com:9067";
 // YCash
 // pub const LWD_URL: &str = "https://lite.ycash.xyz:9067";
 
+mod coinconfig;
 mod builder;
 mod chain;
 mod commitment;
@@ -26,6 +27,7 @@ mod contact;
 mod db;
 mod hash;
 mod key;
+mod key2;
 mod mempool;
 mod pay;
 mod prices;
@@ -34,7 +36,8 @@ mod scan;
 mod taddr;
 mod transaction;
 mod ua;
-mod wallet;
+// mod wallet;
+mod api;
 
 #[cfg(feature = "ledger")]
 mod ledger;
@@ -72,7 +75,7 @@ pub use crate::pay::{broadcast_tx, Tx, TxIn, TxOut};
 pub use crate::print::*;
 pub use crate::scan::{latest_height, scan_all, sync_async};
 pub use crate::ua::{get_sapling, get_ua};
-pub use crate::wallet::{decrypt_backup, encrypt_backup, RecipientMemo, Wallet, WalletBalance};
+// pub use crate::wallet::{decrypt_backup, encrypt_backup, RecipientMemo, Wallet, WalletBalance};
 
 #[cfg(feature = "ledger_sapling")]
 pub use crate::ledger::sapling::build_tx_ledger;

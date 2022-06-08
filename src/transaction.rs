@@ -1,5 +1,5 @@
 use crate::contact::{Contact, ContactDecoder};
-use crate::wallet::decode_memo;
+// use crate::wallet::decode_memo;
 use crate::{CompactTxStreamerClient, DbAdapter, TxFilter};
 use anyhow::anyhow;
 use futures::StreamExt;
@@ -20,6 +20,7 @@ use zcash_primitives::sapling::note_encryption::{
 };
 use zcash_primitives::transaction::Transaction;
 use zcash_primitives::zip32::ExtendedFullViewingKey;
+use crate::api::payment::decode_memo;
 
 #[derive(Debug)]
 pub struct TransactionInfo {

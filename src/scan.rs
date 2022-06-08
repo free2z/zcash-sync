@@ -76,7 +76,8 @@ impl std::fmt::Debug for Blocks {
     }
 }
 
-pub type ProgressCallback = Arc<Mutex<dyn Fn(u32) + Send>>;
+pub type ProgressCallback = dyn Fn(u32) + Send;
+pub type AMProgressCallback = Arc<Mutex<ProgressCallback>>;
 
 #[derive(PartialEq, PartialOrd, Debug, Hash, Eq)]
 pub struct TxIdHeight {
@@ -91,7 +92,7 @@ pub async fn sync_async(
     get_tx: bool,
     db_path: &str,
     target_height_offset: u32,
-    progress_callback: ProgressCallback,
+    progress_callback: AMProgressCallback,
     ld_url: &str,
 ) -> anyhow::Result<()> {
     let ld_url = ld_url.to_owned();

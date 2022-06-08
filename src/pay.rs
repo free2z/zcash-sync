@@ -1,5 +1,5 @@
 use crate::db::SpendableNote;
-use crate::wallet::RecipientMemo;
+// use crate::wallet::RecipientMemo;
 use crate::{
     connect_lightwalletd, get_latest_height, hex_to_hash, GetAddressUtxosReply, RawTransaction,
 };
@@ -28,6 +28,8 @@ use zcash_primitives::transaction::builder::{Builder, Progress};
 use zcash_primitives::transaction::components::amount::{DEFAULT_FEE, MAX_MONEY};
 use zcash_primitives::transaction::components::{Amount, OutPoint, TxOut as ZTxOut};
 use zcash_primitives::zip32::{ExtendedFullViewingKey, ExtendedSpendingKey};
+use crate::api::payment::RecipientMemo;
+use crate::coinconfig::CoinConfig;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Tx {
@@ -391,8 +393,9 @@ impl Tx {
     }
 }
 
-pub async fn broadcast_tx(tx: &[u8], ld_url: &str) -> anyhow::Result<String> {
-    let mut client = connect_lightwalletd(ld_url).await?;
+pub async fn broadcast_tx(tx: &[u8]) -> anyhow::Result<String> {
+    let c = CoinConfig::get_active();
+    let mut client = c.connect_lwd().await?;
     let latest_height = get_latest_height(&mut client).await?;
     let raw_tx = RawTransaction {
         data: tx.to_vec(),

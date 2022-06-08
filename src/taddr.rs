@@ -28,24 +28,19 @@ pub async fn get_taddr_balance(
 
 pub async fn get_utxos(
     client: &mut CompactTxStreamerClient<Channel>,
-    db: &DbAdapter,
+    t_address: &str,
     account: u32,
 ) -> anyhow::Result<Vec<GetAddressUtxosReply>> {
-    let t_address = db.get_taddr(account)?;
-    if let Some(t_address) = t_address {
-        let req = GetAddressUtxosArg {
-            addresses: vec![t_address.to_string()],
-            start_height: 0,
-            max_entries: 0,
-        };
-        let utxo_rep = client
-            .get_address_utxos(Request::new(req))
-            .await?
-            .into_inner();
-        Ok(utxo_rep.address_utxos)
-    } else {
-        Ok(vec![])
-    }
+    let req = GetAddressUtxosArg {
+        addresses: vec![t_address.to_string()],
+        start_height: 0,
+        max_entries: 0,
+    };
+    let utxo_rep = client
+        .get_address_utxos(Request::new(req))
+        .await?
+        .into_inner();
+    Ok(utxo_rep.address_utxos)
 }
 
 pub async fn scan_transparent_accounts(

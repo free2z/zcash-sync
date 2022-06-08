@@ -1,12 +1,15 @@
+use crate::coinconfig::CoinConfig;
 use bech32::{ToBase32, Variant};
 use bip39::{Language, Mnemonic, Seed};
-use rand::RngCore;
 use rand::rngs::OsRng;
+use rand::RngCore;
 use zcash_client_backend::address::RecipientAddress;
-use zcash_client_backend::encoding::{decode_extended_full_viewing_key, decode_extended_spending_key, encode_extended_full_viewing_key, encode_extended_spending_key, encode_payment_address};
+use zcash_client_backend::encoding::{
+    decode_extended_full_viewing_key, decode_extended_spending_key,
+    encode_extended_full_viewing_key, encode_extended_spending_key, encode_payment_address,
+};
 use zcash_primitives::consensus::{Network, Parameters};
 use zcash_primitives::zip32::{ChildIndex, ExtendedFullViewingKey, ExtendedSpendingKey};
-use crate::coinconfig::CoinConfig;
 
 pub fn decode_key(
     coin: u8,
@@ -15,16 +18,16 @@ pub fn decode_key(
 ) -> anyhow::Result<(Option<String>, Option<String>, String, String)> {
     let c = CoinConfig::get(coin);
     let network = c.chain.network();
-    let res = if let Ok(mnemonic) = Mnemonic::from_phrase(&key, Language::English) {
+    let res = if let Ok(mnemonic) = Mnemonic::from_phrase(key, Language::English) {
         let (sk, ivk, pa) = derive_secret_key(network, &mnemonic, index)?;
         Ok((Some(key.to_string()), Some(sk), ivk, pa))
     } else if let Ok(Some(sk)) =
-    decode_extended_spending_key(network.hrp_sapling_extended_spending_key(), &key)
+        decode_extended_spending_key(network.hrp_sapling_extended_spending_key(), key)
     {
         let (ivk, pa) = derive_viewing_key(network, &sk)?;
         Ok((None, Some(key.to_string()), ivk, pa))
     } else if let Ok(Some(fvk)) =
-    decode_extended_full_viewing_key(network.hrp_sapling_extended_full_viewing_key(), &key)
+        decode_extended_full_viewing_key(network.hrp_sapling_extended_full_viewing_key(), key)
     {
         let pa = derive_address(network, &fvk)?;
         Ok((None, None, key.to_string(), pa))
@@ -37,16 +40,16 @@ pub fn decode_key(
 pub fn is_valid_key(coin: u8, key: &str) -> i8 {
     let c = CoinConfig::get(coin);
     let network = c.chain.network();
-    if Mnemonic::from_phrase(&key, Language::English).is_ok() {
+    if Mnemonic::from_phrase(key, Language::English).is_ok() {
         return 0;
     }
     if let Ok(Some(_)) =
-    decode_extended_spending_key(network.hrp_sapling_extended_spending_key(), &key)
+        decode_extended_spending_key(network.hrp_sapling_extended_spending_key(), key)
     {
         return 1;
     }
     if let Ok(Some(_)) =
-    decode_extended_full_viewing_key(network.hrp_sapling_extended_full_viewing_key(), &key)
+        decode_extended_full_viewing_key(network.hrp_sapling_extended_full_viewing_key(), key)
     {
         return 2;
     }
@@ -65,7 +68,7 @@ fn derive_secret_key(
     mnemonic: &Mnemonic,
     index: u32,
 ) -> anyhow::Result<(String, String, String)> {
-    let seed = Seed::new(&mnemonic, "");
+    let seed = Seed::new(mnemonic, "");
     let master = ExtendedSpendingKey::master(seed.as_bytes());
     let path = [
         ChildIndex::Hardened(32),
@@ -92,8 +95,7 @@ fn derive_viewing_key(
 
 fn derive_address(network: &Network, fvk: &ExtendedFullViewingKey) -> anyhow::Result<String> {
     let (_, payment_address) = fvk.default_address();
-    let address =
-        encode_payment_address(network.hrp_sapling_payment_address(), &payment_address);
+    let address = encode_payment_address(network.hrp_sapling_payment_address(), &payment_address);
     Ok(address)
 }
 

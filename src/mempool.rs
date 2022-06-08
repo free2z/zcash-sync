@@ -1,16 +1,14 @@
 use crate::chain::to_output_description;
-use crate::{
-    connect_lightwalletd, get_latest_height, CompactTx, CompactTxStreamerClient, DbAdapter, Exclude,
-};
+use crate::{CompactTx, CompactTxStreamerClient, Exclude};
 use std::collections::HashMap;
 use tonic::transport::Channel;
 use tonic::Request;
-use zcash_client_backend::encoding::decode_extended_full_viewing_key;
-use zcash_params::coin::{get_coin_chain, CoinChain, CoinType};
-use zcash_primitives::consensus::{BlockHeight, Parameters};
+
+use crate::coinconfig::CoinConfig;
+use zcash_params::coin::CoinChain;
+use zcash_primitives::consensus::BlockHeight;
 use zcash_primitives::sapling::note_encryption::try_sapling_compact_note_decryption;
 use zcash_primitives::sapling::SaplingIvk;
-use crate::coinconfig::CoinConfig;
 
 const DEFAULT_EXCLUDE_LEN: u8 = 1;
 
@@ -99,9 +97,12 @@ impl MemPool {
         }
         for co in tx.outputs.iter() {
             let od = to_output_description(co);
-            if let Some((note, _)) =
-                try_sapling_compact_note_decryption(c.chain.network(), BlockHeight::from_u32(height), ivk, &od)
-            {
+            if let Some((note, _)) = try_sapling_compact_note_decryption(
+                c.chain.network(),
+                BlockHeight::from_u32(height),
+                ivk,
+                &od,
+            ) {
                 balance += note.value as i64; // value is incoming
             }
         }

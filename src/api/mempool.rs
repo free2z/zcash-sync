@@ -1,6 +1,6 @@
 use zcash_client_backend::encoding::decode_extended_full_viewing_key;
 use zcash_primitives::consensus::Parameters;
-use zcash_primitives::sapling::SaplingIvk;
+
 use crate::coinconfig::CoinConfig;
 use crate::get_latest_height;
 
@@ -15,8 +15,14 @@ pub async fn scan() -> anyhow::Result<i64> {
         CoinConfig::set_height(height);
         mempool.clear()?;
     }
-    let fvk = decode_extended_full_viewing_key(c.chain.network().hrp_sapling_extended_full_viewing_key(), &ivk)?.unwrap();
-    mempool.update(&mut client, height, &fvk.fvk.vk.ivk()).await?;
+    let fvk = decode_extended_full_viewing_key(
+        c.chain.network().hrp_sapling_extended_full_viewing_key(),
+        &ivk,
+    )?
+    .unwrap();
+    mempool
+        .update(&mut client, height, &fvk.fvk.vk.ivk())
+        .await?;
 
     Ok(mempool.get_unconfirmed_balance())
 }

@@ -1,8 +1,8 @@
 use crate::db::SpendableNote;
 // use crate::wallet::RecipientMemo;
-use crate::{
-    connect_lightwalletd, get_latest_height, hex_to_hash, GetAddressUtxosReply, RawTransaction,
-};
+use crate::api::payment::RecipientMemo;
+use crate::coinconfig::CoinConfig;
+use crate::{get_latest_height, hex_to_hash, GetAddressUtxosReply, RawTransaction};
 use anyhow::anyhow;
 use jubjub::Fr;
 use rand::prelude::SliceRandom;
@@ -28,8 +28,6 @@ use zcash_primitives::transaction::builder::{Builder, Progress};
 use zcash_primitives::transaction::components::amount::{DEFAULT_FEE, MAX_MONEY};
 use zcash_primitives::transaction::components::{Amount, OutPoint, TxOut as ZTxOut};
 use zcash_primitives::zip32::{ExtendedFullViewingKey, ExtendedSpendingKey};
-use crate::api::payment::RecipientMemo;
-use crate::coinconfig::CoinConfig;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Tx {
@@ -117,7 +115,7 @@ impl TxBuilder {
                 self.chain()
                     .network()
                     .hrp_sapling_extended_full_viewing_key(),
-                &fvk,
+                fvk,
             ),
             amount: u64::from(amount),
             rseed: hex::encode(rseed),
@@ -251,7 +249,7 @@ impl TxBuilder {
     ) -> anyhow::Result<()> {
         let ovk = &fvk.fvk.ovk;
         let (_, change) = fvk.default_address();
-        self.set_change(&ovk, &change)?;
+        self.set_change(ovk, &change)?;
 
         for r in recipients.iter() {
             let to_addr = RecipientAddress::decode(self.chain().network(), &r.address)
@@ -276,7 +274,7 @@ impl TxBuilder {
                 match &to_addr {
                     RecipientAddress::Shielded(_pa) => {
                         log::info!("Sapling output: {}", r.amount);
-                        self.add_z_output(&r.address, ovk, note_amount, &memo)
+                        self.add_z_output(&r.address, ovk, note_amount, memo)
                     }
                     RecipientAddress::Transparent(_address) => {
                         self.add_t_output(&r.address, note_amount)

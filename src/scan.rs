@@ -99,7 +99,7 @@ pub async fn sync_async(
     let db_path = db_path.to_string();
     let network = {
         let chain = get_coin_chain(coin_type);
-        chain.network().clone()
+        *chain.network()
     };
 
     let mut client = connect_lightwalletd(&ld_url).await?;
@@ -309,7 +309,7 @@ pub async fn sync_async(
                     if c == Ordering::Equal {
                         return a.index.cmp(&b.index);
                     }
-                    return c;
+                    c
                 });
                 let ids: Vec<_> = ids.into_iter().map(|e| e.id_tx).collect();
                 retrieve_tx_info(coin_type, &mut client, &db_path2, &ids)

@@ -1,12 +1,12 @@
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
+use crate::{connect_lightwalletd, CompactTxStreamerClient, DbAdapter, MemPool};
 use lazy_static::lazy_static;
 use lazycell::AtomicLazyCell;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use tonic::transport::Channel;
+use zcash_params::coin::{get_coin_chain, CoinChain, CoinType};
+use zcash_params::{OUTPUT_PARAMS, SPEND_PARAMS};
 use zcash_proofs::prover::LocalTxProver;
-use zcash_params::{coin, OUTPUT_PARAMS, SPEND_PARAMS};
-use zcash_params::coin::{CoinChain, CoinType, get_coin_chain};
-use crate::{CompactTxStreamerClient, connect_lightwalletd, DbAdapter, MemPool};
 
 lazy_static! {
     pub static ref COIN_CONFIG: [Mutex<CoinConfig>; 2] = [
@@ -98,4 +98,3 @@ pub fn get_prover() -> &'static LocalTxProver {
     }
     PROVER.borrow().unwrap()
 }
-

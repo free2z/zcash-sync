@@ -19,9 +19,9 @@ pub const LWD_URL: &str = "https://mainnet.lightwalletd.com:9067";
 // YCash
 // pub const LWD_URL: &str = "https://lite.ycash.xyz:9067";
 
-mod coinconfig;
 mod builder;
 mod chain;
+mod coinconfig;
 mod commitment;
 mod contact;
 mod db;

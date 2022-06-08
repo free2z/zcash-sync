@@ -1,13 +1,13 @@
+use crate::coinconfig::{init_coin, CoinConfig};
+use crate::{broadcast_tx, ChainError};
+use allo_isolate::{ffi, IntoDart};
+use android_logger::Config;
+use log::Level;
 use std::ffi::{CStr, CString};
 use std::io::Read;
 use std::os::raw::c_char;
 use std::path::Path;
-use allo_isolate::{ffi, IntoDart};
-use android_logger::Config;
-use log::Level;
 use zcash_primitives::transaction::builder::Progress;
-use crate::{broadcast_tx, ChainError};
-use crate::coinconfig::{CoinConfig, init_coin};
 
 static mut POST_COBJ: Option<ffi::DartPostCObjectFnType> = None;
 
@@ -19,7 +19,7 @@ pub unsafe extern "C" fn dart_post_cobject(ptr: ffi::DartPostCObjectFnType) {
 macro_rules! from_c_str {
     ($v: ident) => {
         let $v = CStr::from_ptr($v).to_string_lossy();
-    }
+    };
 }
 
 fn to_c_str(s: String) -> *mut c_char {
@@ -104,11 +104,13 @@ pub unsafe extern "C" fn reset_app() {
 pub unsafe extern "C" fn new_account(coin: u8, name: *mut c_char, data: *mut c_char, index: i32) {
     from_c_str!(name);
     from_c_str!(data);
-    let data = if !data.is_empty() { Some(data.to_string()) } else { None };
-    let index = if index >= 0 { Some(index as u32) } else { None };
-    let res = || {
-        crate::api::account::new_account(coin, &name, data, index)
+    let data = if !data.is_empty() {
+        Some(data.to_string())
+    } else {
+        None
     };
+    let index = if index >= 0 { Some(index as u32) } else { None };
+    let res = || crate::api::account::new_account(coin, &name, data, index);
     log_result(res())
 }
 
@@ -116,35 +118,24 @@ pub unsafe extern "C" fn new_account(coin: u8, name: *mut c_char, data: *mut c_c
 pub unsafe extern "C" fn new_sub_account(coin: u8, id: u32, name: *mut c_char, index: i32) {
     from_c_str!(name);
     let index = if index >= 0 { Some(index as u32) } else { None };
-    let res = || {
-        crate::api::account::new_sub_account(coin, id, &name, index)
-    };
+    let res = || crate::api::account::new_sub_account(coin, id, &name, index);
     log_result(res())
 }
 
 #[tokio::main]
 #[no_mangle]
-pub async unsafe extern "C" fn warp(
-    coin: u8,
-    get_tx: bool,
-    anchor_offset: u32,
-    port: i64,
-) -> u8 {
+pub async unsafe extern "C" fn warp(coin: u8, get_tx: bool, anchor_offset: u32, port: i64) -> u8 {
     let res = async {
         log::info!("Sync started");
-        let result = crate::api::sync::coin_sync(
-            coin,
-            get_tx,
-            anchor_offset,
-            move |height| {
-                let mut height = height.into_dart();
-                if port != 0 {
-                    POST_COBJ.map(|p| {
-                        p(port, &mut height);
-                    });
+        let result = crate::api::sync::coin_sync(coin, get_tx, anchor_offset, move |height| {
+            let mut height = height.into_dart();
+            if port != 0 {
+                if let Some(p) = POST_COBJ {
+                    p(port, &mut height);
                 }
-            },
-        ).await;
+            }
+        })
+        .await;
         log::info!("Sync finished");
 
         crate::api::mempool::scan().await?;
@@ -182,9 +173,7 @@ pub unsafe extern "C" fn valid_address(coin: u8, address: *mut c_char) -> bool {
 
 #[no_mangle]
 pub unsafe extern "C" fn new_diversified_address() -> *mut c_char {
-    let res = || {
-        crate::api::account::new_diversified_address()
-    };
+    let res = || crate::api::account::new_diversified_address();
     to_c_str(log_string(res()))
 }
 
@@ -203,9 +192,9 @@ fn report_progress(progress: Progress, port: i64) {
         };
         let mut progress = progress.into_dart();
         unsafe {
-            POST_COBJ.map(|p| {
+            if let Some(p) = POST_COBJ {
                 p(port, &mut progress);
-            });
+            }
         }
     }
 }
@@ -223,15 +212,15 @@ pub async unsafe extern "C" fn send_multi_payment(
         let height = crate::api::sync::get_latest_height().await?;
         let recipients = crate::api::payment::parse_recipients(&recipients_json)?;
         let res = crate::api::payment::build_sign_send_multi_payment(
-                height,
-                &recipients,
-                use_transparent,
-                anchor_offset,
-                Box::new(move |progress| {
-                    report_progress(progress, port);
-                }),
-            )
-            .await?;
+            height,
+            &recipients,
+            use_transparent,
+            anchor_offset,
+            Box::new(move |progress| {
+                report_progress(progress, port);
+            }),
+        )
+        .await?;
         Ok(res)
     };
     to_c_str(log_string(res.await))
@@ -309,7 +298,8 @@ pub async unsafe extern "C" fn prepare_multi_payment(
             &recipients,
             use_transparent,
             anchor_offset,
-        ).await?;
+        )
+        .await?;
         Ok(tx)
     };
     to_c_str(log_string(res.await))
@@ -323,9 +313,13 @@ pub async unsafe extern "C" fn sign(tx_filename: *mut c_char, port: i64) -> *mut
         let mut file = std::fs::File::open(&tx_filename.to_string())?;
         let mut s = String::new();
         file.read_to_string(&mut s)?;
-        let raw_tx = crate::api::payment::sign_only_multi_payment(&s, Box::new(move |progress| {
+        let raw_tx = crate::api::payment::sign_only_multi_payment(
+            &s,
+            Box::new(move |progress| {
                 report_progress(progress, port);
-            })).await?;
+            }),
+        )
+        .await?;
         Ok(raw_tx)
     };
     let tx_hex = hex::encode(encode_tx_result(res.await));
@@ -373,14 +367,23 @@ pub async unsafe extern "C" fn get_block_by_time(time: u32) -> u32 {
 
 #[tokio::main]
 #[no_mangle]
-pub async unsafe extern "C" fn sync_historical_prices(now: i64, days: u32, currency: *mut c_char) -> u32 {
+pub async unsafe extern "C" fn sync_historical_prices(
+    now: i64,
+    days: u32,
+    currency: *mut c_char,
+) -> u32 {
     from_c_str!(currency);
     let res = crate::api::historical_prices::sync_historical_prices(now, days, &currency).await;
     log_result(res)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn store_contact(id: u32, name: *mut c_char, address: *mut c_char, dirty: bool) {
+pub unsafe extern "C" fn store_contact(
+    id: u32,
+    name: *mut c_char,
+    address: *mut c_char,
+    dirty: bool,
+) {
     from_c_str!(name);
     from_c_str!(address);
     let res = crate::api::contact::store_contact(id, &name, &address, dirty);
@@ -419,7 +422,11 @@ pub unsafe extern "C" fn delete_account(account: u32) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn make_payment_uri(address: *mut c_char, amount: u64, memo: *mut c_char) -> *mut c_char {
+pub unsafe extern "C" fn make_payment_uri(
+    address: *mut c_char,
+    amount: u64,
+    memo: *mut c_char,
+) -> *mut c_char {
     from_c_str!(memo);
     from_c_str!(address);
     let res = crate::api::payment_uri::make_payment_uri(&address, amount, &memo);

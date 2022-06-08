@@ -1,19 +1,21 @@
 use std::str::FromStr;
-use std::sync::Arc;
+
 use secp256k1::SecretKey;
-use tokio::sync::Mutex;
-use zcash_client_backend::encoding::{decode_extended_full_viewing_key, decode_extended_spending_key};
-use zcash_primitives::consensus::Parameters;
-use zcash_primitives::transaction::builder::Progress;
-use crate::coinconfig::{CoinConfig, get_prover};
+
+use crate::api::sync::get_latest_height;
+use crate::coinconfig::{get_prover, CoinConfig};
 use crate::pay::TxBuilder;
 use crate::{broadcast_tx, Tx};
-use crate::api::sync::get_latest_height;
-use crate::scan::{AMProgressCallback, ProgressCallback};
+use zcash_client_backend::encoding::{
+    decode_extended_full_viewing_key, decode_extended_spending_key,
+};
+use zcash_primitives::consensus::Parameters;
+use zcash_primitives::transaction::builder::Progress;
+
+use crate::db::ZMessage;
 use crate::taddr::get_utxos;
 use serde::Deserialize;
 use zcash_primitives::memo::Memo;
-use crate::db::ZMessage;
 // use crate::wallet::Recipient;
 
 type PaymentProgressCallback = Box<dyn Fn(Progress) + Send + Sync>;
@@ -32,15 +34,14 @@ async fn prepare_multi_payment(
         c.chain.network().hrp_sapling_extended_full_viewing_key(),
         &fvk,
     )
-        .unwrap()
-        .unwrap();
+    .unwrap()
+    .unwrap();
     let utxos = if use_transparent {
         let mut client = c.connect_lwd().await?;
         let t_address = c.db()?.get_taddr(c.id_account)?;
         if let Some(t_address) = t_address {
             get_utxos(&mut client, &t_address, c.id_account).await?
-        }
-        else {
+        } else {
             vec![]
         }
     } else {
@@ -49,16 +50,15 @@ async fn prepare_multi_payment(
 
     let target_amount: u64 = recipients.iter().map(|r| r.amount).sum();
     let anchor_height = last_height.saturating_sub(anchor_offset);
-    let spendable_notes = c.db()?.get_spendable_notes(c.id_account, anchor_height, &fvk)?;
+    let spendable_notes = c
+        .db()?
+        .get_spendable_notes(c.id_account, anchor_height, &fvk)?;
     let note_ids = tx_builder.select_inputs(&fvk, &spendable_notes, &utxos, target_amount)?;
     tx_builder.select_outputs(&fvk, recipients)?;
     Ok((tx_builder.tx, note_ids))
 }
 
-fn sign(
-    tx: &Tx,
-    progress_callback: PaymentProgressCallback,
-) -> anyhow::Result<Vec<u8>> {
+fn sign(tx: &Tx, progress_callback: PaymentProgressCallback) -> anyhow::Result<Vec<u8>> {
     let c = CoinConfig::get_active();
     let prover = get_prover();
     let db = c.db()?;
@@ -81,13 +81,8 @@ pub async fn build_only_multi_payment(
     use_transparent: bool,
     anchor_offset: u32,
 ) -> anyhow::Result<String> {
-    let (tx, _) = prepare_multi_payment(
-            last_height,
-            recipients,
-            use_transparent,
-            anchor_offset,
-        )
-        .await?;
+    let (tx, _) =
+        prepare_multi_payment(last_height, recipients, use_transparent, anchor_offset).await?;
     let tx_str = serde_json::to_string(&tx)?;
     Ok(tx_str)
 }
@@ -110,13 +105,8 @@ pub async fn build_sign_send_multi_payment(
     progress_callback: PaymentProgressCallback,
 ) -> anyhow::Result<String> {
     let c = CoinConfig::get_active();
-    let (tx, note_ids) = prepare_multi_payment(
-            last_height,
-            recipients,
-            use_transparent,
-            anchor_offset,
-        )
-        .await?;
+    let (tx, note_ids) =
+        prepare_multi_payment(last_height, recipients, use_transparent, anchor_offset).await?;
     let raw_tx = sign(&tx, progress_callback)?;
     let tx_id = broadcast_tx(&raw_tx).await?;
 
@@ -126,14 +116,11 @@ pub async fn build_sign_send_multi_payment(
 
 pub async fn shield_taddr() -> anyhow::Result<String> {
     let last_height = get_latest_height().await?;
-    let tx_id = build_sign_send_multi_payment(last_height, &[], true, 0, Box::new(|_| {}))
-        .await?;
+    let tx_id = build_sign_send_multi_payment(last_height, &[], true, 0, Box::new(|_| {})).await?;
     Ok(tx_id)
 }
 
-pub fn parse_recipients(
-    recipients: &str,
-) -> anyhow::Result<Vec<RecipientMemo>> {
+pub fn parse_recipients(recipients: &str) -> anyhow::Result<Vec<RecipientMemo>> {
     let c = CoinConfig::get_active();
     let address = c.db()?.get_address(c.id_account)?;
     let recipients: Vec<Recipient> = serde_json::from_str(recipients)?;
@@ -145,7 +132,7 @@ pub fn parse_recipients(
 }
 
 pub fn encode_memo(from: &str, include_from: bool, subject: &str, body: &str) -> String {
-    let from = if include_from { from } else { &"" };
+    let from = if include_from { from } else { "" };
     let msg = format!("\u{1F6E1}MSG\n{}\n{}\n{}", from, subject, body);
     msg
 }

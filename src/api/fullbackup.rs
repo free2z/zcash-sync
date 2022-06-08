@@ -1,10 +1,10 @@
-use chacha20poly1305::aead::{Aead, NewAead};
-use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use crate::coinconfig::CoinConfig;
 use crate::db::AccountBackup;
 use bech32::FromBase32;
+use chacha20poly1305::aead::{Aead, NewAead};
+use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 
-const NONCE: &'static [u8; 12] = b"unique nonce";
+const NONCE: &[u8; 12] = b"unique nonce";
 
 pub fn get_full_backup(coin: u8) -> anyhow::Result<Vec<AccountBackup>> {
     let c = CoinConfig::get(coin);

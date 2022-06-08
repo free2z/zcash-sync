@@ -29,7 +29,7 @@ pub async fn get_taddr_balance(
 pub async fn get_utxos(
     client: &mut CompactTxStreamerClient<Channel>,
     t_address: &str,
-    account: u32,
+    _account: u32,
 ) -> anyhow::Result<Vec<GetAddressUtxosReply>> {
     let req = GetAddressUtxosArg {
         addresses: vec![t_address.to_string()],
@@ -81,10 +81,10 @@ pub fn derive_tkeys(
     phrase: &str,
     path: &str,
 ) -> anyhow::Result<(String, String)> {
-    let mnemonic = Mnemonic::from_phrase(&phrase, Language::English)?;
+    let mnemonic = Mnemonic::from_phrase(phrase, Language::English)?;
     let seed = Seed::new(&mnemonic, "");
     let secp = Secp256k1::<All>::new();
-    let ext = ExtendedPrivKey::derive(&seed.as_bytes(), path).unwrap();
+    let ext = ExtendedPrivKey::derive(seed.as_bytes(), path).unwrap();
     let secret_key = SecretKey::from_slice(&ext.secret()).unwrap();
     let pub_key = PublicKey::from_secret_key(&secp, &secret_key);
     let pub_key = pub_key.serialize();

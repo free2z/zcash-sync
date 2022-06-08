@@ -672,7 +672,7 @@ impl DbAdapter {
                 },
             )
             .optional()?
-            .unwrap_or_else(|| [0u8; 11]);
+            .unwrap_or([0u8; 11]);
         Ok(DiversifierIndex(diversifier_index))
     }
 

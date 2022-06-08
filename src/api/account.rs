@@ -1,15 +1,20 @@
 // Account creation
 
+use crate::coinconfig::CoinConfig;
+use crate::key2::decode_key;
 use anyhow::anyhow;
 use bip39::{Language, Mnemonic};
-use rand::RngCore;
 use rand::rngs::OsRng;
+use rand::RngCore;
 use zcash_client_backend::encoding::{decode_extended_full_viewing_key, encode_payment_address};
 use zcash_primitives::consensus::Parameters;
-use crate::coinconfig::{ACTIVE_COIN, CoinConfig};
-use crate::key2::{decode_key, is_valid_key};
 
-pub fn new_account(coin: u8, name: &str, key: Option<String>, index: Option<u32>) -> anyhow::Result<()> {
+pub fn new_account(
+    coin: u8,
+    name: &str,
+    key: Option<String>,
+    index: Option<u32>,
+) -> anyhow::Result<()> {
     let key = match key {
         Some(key) => key,
         None => {
@@ -37,8 +42,7 @@ fn new_account_with_key(coin: u8, name: &str, key: &str, index: u32) -> anyhow::
     let c = CoinConfig::get(coin);
     let (seed, sk, ivk, pa) = decode_key(coin, key, index)?;
     let db = c.db()?;
-    let account =
-        db.store_account(name, seed.as_deref(), index, sk.as_deref(), &ivk, &pa)?;
+    let account = db.store_account(name, seed.as_deref(), index, sk.as_deref(), &ivk, &pa)?;
     if let Some(account) = account {
         db.create_taddr(account)?;
     }
@@ -53,7 +57,7 @@ pub fn new_diversified_address() -> anyhow::Result<String> {
         c.chain.network().hrp_sapling_extended_full_viewing_key(),
         &ivk,
     )?
-        .unwrap();
+    .unwrap();
     let mut diversifier_index = db.get_diversifier(c.id_account)?;
     diversifier_index.increment().unwrap();
     let (new_diversifier_index, pa) = fvk
@@ -75,13 +79,17 @@ pub async fn get_taddr_balance() -> anyhow::Result<u64> {
     Ok(balance)
 }
 
-pub async fn scan_transparent_accounts(
-    gap_limit: usize,
-) -> anyhow::Result<()> {
+pub async fn scan_transparent_accounts(gap_limit: usize) -> anyhow::Result<()> {
     let c = CoinConfig::get_active();
     let mut client = c.connect_lwd().await?;
-    crate::taddr::scan_transparent_accounts(c.chain.network(), &mut client, &c.db()?, c.id_account, gap_limit)
-        .await?;
+    crate::taddr::scan_transparent_accounts(
+        c.chain.network(),
+        &mut client,
+        &c.db()?,
+        c.id_account,
+        gap_limit,
+    )
+    .await?;
     Ok(())
 }
 
@@ -120,4 +128,3 @@ pub fn delete_account(account: u32) -> anyhow::Result<()> {
     db.delete_account(account)?;
     Ok(())
 }
-

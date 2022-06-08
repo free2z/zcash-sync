@@ -63,7 +63,7 @@ impl ContactDecoder {
         if !self.has_contacts {
             return Ok(Vec::new());
         }
-        let data: Vec<_> = self.chunks.iter().cloned().flatten().collect();
+        let data: Vec<_> = self.chunks.iter().flatten().cloned().collect();
         let contacts = bincode::deserialize::<Vec<Contact>>(&data)?;
         Ok(contacts)
     }

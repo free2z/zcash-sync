@@ -1,12 +1,12 @@
 // Sync
 
+use crate::coinconfig::CoinConfig;
+use crate::scan::AMProgressCallback;
+use crate::{BlockId, CTree, CompactTxStreamerClient};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tonic::Request;
 use tonic::transport::Channel;
-use crate::coinconfig::CoinConfig;
-use crate::{BlockId, ChainError, CompactTxStreamerClient, CTree};
-use crate::scan::AMProgressCallback;
+use tonic::Request;
 
 const DEFAULT_CHUNK_SIZE: u32 = 100_000;
 
@@ -17,21 +17,8 @@ pub async fn coin_sync(
     progress_callback: impl Fn(u32) + Send + 'static,
 ) -> anyhow::Result<()> {
     let cb = Arc::new(Mutex::new(progress_callback));
-    coin_sync_impl(
-        coin,
-        get_tx,
-        DEFAULT_CHUNK_SIZE,
-        anchor_offset,
-        cb.clone(),
-    )
-        .await?;
-    coin_sync_impl(
-        coin,
-        get_tx,
-        DEFAULT_CHUNK_SIZE,
-        0,
-        cb.clone(),
-    ).await?;
+    coin_sync_impl(coin, get_tx, DEFAULT_CHUNK_SIZE, anchor_offset, cb.clone()).await?;
+    coin_sync_impl(coin, get_tx, DEFAULT_CHUNK_SIZE, 0, cb.clone()).await?;
     Ok(())
 }
 
@@ -51,7 +38,8 @@ async fn coin_sync_impl(
         target_height_offset,
         progress_callback,
         &c.lwd_url,
-    ).await?;
+    )
+    .await?;
     Ok(())
 }
 
@@ -78,7 +66,10 @@ pub async fn rewind_to_height(height: u32) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn fetch_and_store_tree_state(client: &mut CompactTxStreamerClient<Channel>, height: u32) -> anyhow::Result<()> {
+async fn fetch_and_store_tree_state(
+    client: &mut CompactTxStreamerClient<Channel>,
+    height: u32,
+) -> anyhow::Result<()> {
     let c = CoinConfig::get_active();
     let block_id = BlockId {
         height: height as u64,
@@ -90,7 +81,8 @@ async fn fetch_and_store_tree_state(client: &mut CompactTxStreamerClient<Channel
         .await?
         .into_inner();
     let tree = CTree::read(&*hex::decode(&tree_state.tree)?)?;
-    c.db()?.store_block(height, &block.hash, block.time, &tree)?;
+    c.db()?
+        .store_block(height, &block.hash, block.time, &tree)?;
     Ok(())
 }
 
@@ -107,4 +99,3 @@ pub async fn get_block_by_time(time: u32) -> anyhow::Result<u32> {
     let date_time = crate::chain::get_block_by_time(c.chain.network(), &mut client, time).await?;
     Ok(date_time)
 }
-

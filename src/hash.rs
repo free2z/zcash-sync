@@ -19,7 +19,7 @@ fn read_generators_bin() -> Vec<ExtendedNielsPoint> {
         for _j in 0..32 {
             for _k in 0..256 {
                 let mut bb = [0u8; 32];
-                generators_bin.read(&mut bb).unwrap();
+                generators_bin.read_exact(&mut bb).unwrap();
                 let p = ExtendedPoint::from(SubgroupPoint::from_bytes_unchecked(&bb).unwrap())
                     .to_niels();
                 gens.push(p);

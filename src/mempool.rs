@@ -19,14 +19,16 @@ struct MemPoolTransacton {
 }
 
 pub struct MemPool {
+    coin: u8,
     transactions: HashMap<Vec<u8>, MemPoolTransacton>,
     nfs: HashMap<Vec<u8>, u64>,
     balance: i64,
 }
 
 impl MemPool {
-    pub fn new() -> MemPool {
+    pub fn new(coin: u8) -> MemPool {
         MemPool {
+            coin,
             transactions: HashMap::new(),
             nfs: HashMap::new(),
             balance: 0,
@@ -38,7 +40,7 @@ impl MemPool {
     }
 
     pub fn clear(&mut self) -> anyhow::Result<()> {
-        let c = CoinConfig::get_active();
+        let c = CoinConfig::get(self.coin);
         self.nfs = c.db()?.get_nullifier_amounts(c.id_account, true)?;
         self.transactions.clear();
         self.balance = 0;

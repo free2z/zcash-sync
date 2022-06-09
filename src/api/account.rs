@@ -34,6 +34,7 @@ pub fn new_sub_account(name: &str, index: Option<u32>) -> anyhow::Result<u32> {
     let (seed, _) = db.get_seed(c.id_account)?;
     let seed = seed.ok_or_else(|| anyhow!("Account has no seed"))?;
     let index = index.unwrap_or_else(|| db.next_account_id(&seed).unwrap());
+    drop(db);
     let id_account = new_account_with_key(c.coin, name, &seed, index)?;
     Ok(id_account)
 }

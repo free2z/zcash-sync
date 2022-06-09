@@ -2,11 +2,13 @@ use crate::coinconfig::{init_coin, CoinConfig};
 use crate::{broadcast_tx, ChainError};
 use allo_isolate::{ffi, IntoDart};
 use android_logger::Config;
+use lazy_static::lazy_static;
 use log::Level;
 use std::ffi::{CStr, CString};
 use std::io::Read;
 use std::os::raw::c_char;
 use std::path::Path;
+use std::sync::Mutex;
 use zcash_primitives::transaction::builder::Progress;
 
 static mut POST_COBJ: Option<ffi::DartPostCObjectFnType> = None;
@@ -138,41 +140,50 @@ pub unsafe extern "C" fn new_sub_account(name: *mut c_char, index: i32) -> u32 {
     log_result(res)
 }
 
+lazy_static! {
+    static ref SYNC_LOCK: Mutex<()> = Mutex::new(());
+}
+
 #[tokio::main]
 #[no_mangle]
 pub async unsafe extern "C" fn warp(coin: u8, get_tx: bool, anchor_offset: u32, port: i64) -> u8 {
-    let res = async {
-        log::info!("Sync started");
-        let result = crate::api::sync::coin_sync(coin, get_tx, anchor_offset, move |height| {
-            let mut height = height.into_dart();
-            if port != 0 {
-                if let Some(p) = POST_COBJ {
-                    p(port, &mut height);
-                }
-            }
-        })
-        .await;
-        log::info!("Sync finished");
-
-        crate::api::mempool::scan().await?;
-
-        match result {
-            Ok(_) => Ok(0),
-            Err(err) => {
-                if let Some(e) = err.downcast_ref::<ChainError>() {
-                    match e {
-                        ChainError::Reorg => Ok(1),
-                        ChainError::Busy => Ok(2),
+    let lock = SYNC_LOCK.try_lock();
+    if let Ok(_) = lock {
+        let res = async {
+            log::info!("Sync started");
+            let result = crate::api::sync::coin_sync(coin, get_tx, anchor_offset, move |height| {
+                let mut height = height.into_dart();
+                if port != 0 {
+                    if let Some(p) = POST_COBJ {
+                        p(port, &mut height);
                     }
-                } else {
-                    log::error!("{}", err);
-                    Ok(0xFF)
+                }
+            })
+            .await;
+            log::info!("Sync finished");
+
+            crate::api::mempool::scan().await?;
+
+            match result {
+                Ok(_) => Ok(0),
+                Err(err) => {
+                    if let Some(e) = err.downcast_ref::<ChainError>() {
+                        match e {
+                            ChainError::Reorg => Ok(1),
+                            ChainError::Busy => Ok(2),
+                        }
+                    } else {
+                        log::error!("{}", err);
+                        Ok(0xFF)
+                    }
                 }
             }
-        }
-    };
-    let r = res.await;
-    log_result(r)
+        };
+        let r = res.await;
+        log_result(r)
+    } else {
+        0
+    }
 }
 
 #[no_mangle]

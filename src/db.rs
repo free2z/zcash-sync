@@ -74,7 +74,6 @@ pub struct AccountBackup {
 
 impl DbAdapter {
     pub fn new(coin_type: CoinType, db_path: &str) -> anyhow::Result<DbAdapter> {
-        log::info!("Database opened: {}!!", db_path);
         let connection = Connection::open(db_path)?;
         connection.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
         connection.execute("PRAGMA synchronous = NORMAL", [])?;

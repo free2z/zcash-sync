@@ -23,8 +23,13 @@ pub fn set_active(active: u8) {
 }
 
 pub fn set_active_account(coin: u8, id: u32) {
-    let mut c = COIN_CONFIG[coin as usize].lock().unwrap();
-    c.id_account = id;
+    let mempool = {
+        let mut c = COIN_CONFIG[coin as usize].lock().unwrap();
+        c.id_account = id;
+        c.mempool.clone()
+    };
+    let mut mempool = mempool.lock().unwrap();
+    let _ = mempool.clear();
 }
 
 pub fn set_coin_lwd_url(coin: u8, lwd_url: &str) {
@@ -62,7 +67,7 @@ impl CoinConfig {
             lwd_url: String::new(),
             db_path: String::new(),
             db: None,
-            mempool: Arc::new(Mutex::new(MemPool::new())),
+            mempool: Arc::new(Mutex::new(MemPool::new(coin))),
             chain,
         }
     }

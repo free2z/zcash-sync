@@ -10,8 +10,8 @@ use zcash_proofs::prover::LocalTxProver;
 
 lazy_static! {
     pub static ref COIN_CONFIG: [Mutex<CoinConfig>; 2] = [
-        Mutex::new(CoinConfig::new(CoinType::Zcash)),
-        Mutex::new(CoinConfig::new(CoinType::Ycash)),
+        Mutex::new(CoinConfig::new(0, CoinType::Zcash)),
+        Mutex::new(CoinConfig::new(1, CoinType::Ycash)),
     ];
     pub static ref PROVER: AtomicLazyCell<LocalTxProver> = AtomicLazyCell::new();
 }
@@ -32,34 +32,47 @@ pub fn set_coin_lwd_url(coin: u8, lwd_url: &str) {
     c.lwd_url = lwd_url.to_string();
 }
 
-pub fn init_coin(coin: u8, db_path: &str) {
+pub fn init_coin(coin: u8, db_path: &str) -> anyhow::Result<()> {
     let mut c = COIN_CONFIG[coin as usize].lock().unwrap();
-    c.db_path = db_path.to_string();
+    c.set_db_path(db_path)?;
+    Ok(())
 }
 
 #[derive(Clone)]
 pub struct CoinConfig {
+    pub coin: u8,
     pub coin_type: CoinType,
     pub id_account: u32,
     pub height: u32,
     pub lwd_url: String,
     pub db_path: String,
     pub mempool: Arc<Mutex<MemPool>>,
+    pub db: Option<Arc<Mutex<DbAdapter>>>,
     pub chain: &'static (dyn CoinChain + Send),
 }
 
 impl CoinConfig {
-    pub fn new(coin_type: CoinType) -> Self {
+    pub fn new(coin: u8, coin_type: CoinType) -> Self {
         let chain = get_coin_chain(coin_type);
         CoinConfig {
+            coin,
             coin_type,
             id_account: 0,
             height: 0,
             lwd_url: String::new(),
             db_path: String::new(),
+            db: None,
             mempool: Arc::new(Mutex::new(MemPool::new())),
             chain,
         }
+    }
+
+    pub fn set_db_path(&mut self, db_path: &str) -> anyhow::Result<()> {
+        self.db_path = db_path.to_string();
+        let db = DbAdapter::new(self.coin_type, &self.db_path)?;
+        db.init_db()?;
+        self.db = Some(Arc::new(Mutex::new(db)));
+        Ok(())
     }
 
     pub fn get(coin: u8) -> CoinConfig {
@@ -83,8 +96,10 @@ impl CoinConfig {
         self.mempool.lock().unwrap()
     }
 
-    pub fn db(&self) -> anyhow::Result<DbAdapter> {
-        DbAdapter::new(self.coin_type, &self.db_path)
+    pub fn db(&self) -> anyhow::Result<MutexGuard<DbAdapter>> {
+        let db = self.db.as_ref().unwrap();
+        let db = db.lock().unwrap();
+        Ok(db)
     }
 
     pub async fn connect_lwd(&self) -> anyhow::Result<CompactTxStreamerClient<Channel>> {

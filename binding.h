@@ -15,9 +15,9 @@ void set_coin_lwd_url(uint8_t coin, char *lwd_url);
 
 void reset_app(void);
 
-void new_account(uint8_t coin, char *name, char *data, int32_t index);
+uint32_t new_account(uint8_t coin, char *name, char *data, int32_t index);
 
-void new_sub_account(uint8_t coin, uint32_t id, char *name, int32_t index);
+uint32_t new_sub_account(char *name, int32_t index);
 
 uint8_t warp(uint8_t coin, bool get_tx, uint32_t anchor_offset, int64_t port);
 
@@ -34,7 +34,7 @@ char *send_multi_payment(char *recipients_json,
                          uint32_t anchor_offset,
                          int64_t port);
 
-void skip_to_last_height(void);
+void skip_to_last_height(uint8_t coin);
 
 void rewind_to_height(uint32_t height);
 
@@ -44,11 +44,11 @@ void mempool_reset(void);
 
 int64_t get_mempool_balance(void);
 
-uint64_t get_taddr_balance(void);
+uint64_t get_taddr_balance(uint8_t coin, uint32_t id_account);
 
 char *shield_taddr(void);
 
-void scan_transparent_accounts(uintptr_t gap_limit);
+void scan_transparent_accounts(uint32_t gap_limit);
 
 char *prepare_multi_payment(char *recipients_json, bool use_transparent, uint32_t anchor_offset);
 
@@ -74,7 +74,7 @@ void mark_all_messages_read(bool read);
 
 void truncate_data(void);
 
-void delete_account(uint32_t account);
+void delete_account(uint8_t coin, uint32_t account);
 
 char *make_payment_uri(char *address, uint64_t amount, char *memo);
 

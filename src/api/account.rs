@@ -1,6 +1,6 @@
 // Account creation
 
-use crate::coinconfig::CoinConfig;
+use crate::coinconfig::{CoinConfig, ACTIVE_COIN};
 use crate::key2::decode_key;
 use anyhow::anyhow;
 use bip39::{Language, Mnemonic};
@@ -14,7 +14,7 @@ pub fn new_account(
     name: &str,
     key: Option<String>,
     index: Option<u32>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<u32> {
     let key = match key {
         Some(key) => key,
         None => {
@@ -24,29 +24,30 @@ pub fn new_account(
             mnemonic.phrase().to_string()
         }
     };
-    new_account_with_key(coin, name, &key, index.unwrap_or(0))?;
-    Ok(())
+    let id_account = new_account_with_key(coin, name, &key, index.unwrap_or(0))?;
+    Ok(id_account)
 }
 
-pub fn new_sub_account(coin: u8, id: u32, name: &str, index: Option<u32>) -> anyhow::Result<()> {
-    let c = CoinConfig::get(coin);
+pub fn new_sub_account(name: &str, index: Option<u32>) -> anyhow::Result<u32> {
+    let c = CoinConfig::get_active();
     let db = c.db()?;
-    let (seed, _) = db.get_seed(id)?;
+    let (seed, _) = db.get_seed(c.id_account)?;
     let seed = seed.ok_or_else(|| anyhow!("Account has no seed"))?;
     let index = index.unwrap_or_else(|| db.next_account_id(&seed).unwrap());
-    new_account_with_key(coin, name, &seed, index)?;
-    Ok(())
+    let id_account = new_account_with_key(c.coin, name, &seed, index)?;
+    Ok(id_account)
 }
 
-fn new_account_with_key(coin: u8, name: &str, key: &str, index: u32) -> anyhow::Result<()> {
+fn new_account_with_key(coin: u8, name: &str, key: &str, index: u32) -> anyhow::Result<u32> {
     let c = CoinConfig::get(coin);
     let (seed, sk, ivk, pa) = decode_key(coin, key, index)?;
     let db = c.db()?;
-    let account = db.store_account(name, seed.as_deref(), index, sk.as_deref(), &ivk, &pa)?;
-    if let Some(account) = account {
+    let (account, exists) =
+        db.store_account(name, seed.as_deref(), index, sk.as_deref(), &ivk, &pa)?;
+    if !exists {
         db.create_taddr(account)?;
     }
-    Ok(())
+    Ok(account)
 }
 
 pub fn new_diversified_address() -> anyhow::Result<String> {
@@ -68,10 +69,15 @@ pub fn new_diversified_address() -> anyhow::Result<String> {
     Ok(pa)
 }
 
-pub async fn get_taddr_balance() -> anyhow::Result<u64> {
+pub async fn get_taddr_balance_default() -> anyhow::Result<u64> {
     let c = CoinConfig::get_active();
+    get_taddr_balance(c.coin, c.id_account).await
+}
+
+pub async fn get_taddr_balance(coin: u8, id_account: u32) -> anyhow::Result<u64> {
+    let c = CoinConfig::get(coin);
     let mut client = c.connect_lwd().await?;
-    let address = c.db()?.get_taddr(c.id_account)?;
+    let address = c.db()?.get_taddr(id_account)?;
     let balance = match address {
         None => 0u64,
         Some(address) => crate::taddr::get_taddr_balance(&mut client, &address).await?,
@@ -82,14 +88,7 @@ pub async fn get_taddr_balance() -> anyhow::Result<u64> {
 pub async fn scan_transparent_accounts(gap_limit: usize) -> anyhow::Result<()> {
     let c = CoinConfig::get_active();
     let mut client = c.connect_lwd().await?;
-    crate::taddr::scan_transparent_accounts(
-        c.chain.network(),
-        &mut client,
-        &c.db()?,
-        c.id_account,
-        gap_limit,
-    )
-    .await?;
+    crate::taddr::scan_transparent_accounts(c.chain.network(), &mut client, gap_limit).await?;
     Ok(())
 }
 
@@ -114,17 +113,20 @@ pub fn get_sk(account: u32) -> anyhow::Result<String> {
 }
 
 pub fn reset_db(coin: u8) -> anyhow::Result<()> {
-    let db = CoinConfig::get(coin).db()?;
+    let c = CoinConfig::get(coin);
+    let db = c.db()?;
     db.reset_db()
 }
 
 pub fn truncate_data() -> anyhow::Result<()> {
-    let db = CoinConfig::get_active().db()?;
+    let c = CoinConfig::get_active();
+    let db = c.db()?;
     db.truncate_data()
 }
 
-pub fn delete_account(account: u32) -> anyhow::Result<()> {
-    let db = CoinConfig::get_active().db()?;
+pub fn delete_account(coin: u8, account: u32) -> anyhow::Result<()> {
+    let c = CoinConfig::get(coin);
+    let db = c.db()?;
     db.delete_account(account)?;
     Ok(())
 }

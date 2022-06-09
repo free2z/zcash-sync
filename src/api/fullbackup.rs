@@ -8,12 +8,14 @@ const NONCE: &[u8; 12] = b"unique nonce";
 
 pub fn get_full_backup(coin: u8) -> anyhow::Result<Vec<AccountBackup>> {
     let c = CoinConfig::get(coin);
-    c.db()?.get_full_backup()
+    let db = c.db()?;
+    db.get_full_backup()
 }
 
 pub fn restore_full_backup(coin: u8, accounts: &[AccountBackup]) -> anyhow::Result<()> {
     let c = CoinConfig::get(coin);
-    c.db()?.restore_full_backup(accounts)
+    let db = c.db()?;
+    db.restore_full_backup(accounts)
 }
 
 pub fn encrypt_backup(accounts: &[AccountBackup], key: &str) -> anyhow::Result<String> {

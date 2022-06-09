@@ -74,6 +74,7 @@ pub struct AccountBackup {
 
 impl DbAdapter {
     pub fn new(coin_type: CoinType, db_path: &str) -> anyhow::Result<DbAdapter> {
+        log::info!("Database opened: {}!!", db_path);
         let connection = Connection::open(db_path)?;
         connection.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
         connection.execute("PRAGMA synchronous = NORMAL", [])?;
@@ -111,24 +112,22 @@ impl DbAdapter {
         sk: Option<&str>,
         ivk: &str,
         address: &str,
-    ) -> anyhow::Result<Option<u32>> {
+    ) -> anyhow::Result<(u32, bool)> {
         let mut statement = self
             .connection
             .prepare("SELECT id_account FROM accounts WHERE ivk = ?1")?;
-        if statement.exists(params![ivk])? {
-            return Ok(None);
-        }
+        let exists = statement.exists(params![ivk])?;
         self.connection.execute(
             "INSERT INTO accounts(name, seed, aindex, sk, ivk, address) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
             ON CONFLICT DO NOTHING",
             params![name, seed, index, sk, ivk, address],
         )?;
-        let id_tx: u32 = self.connection.query_row(
+        let id_account: u32 = self.connection.query_row(
             "SELECT id_account FROM accounts WHERE ivk = ?1",
             params![ivk],
             |row| row.get(0),
         )?;
-        Ok(Some(id_tx))
+        Ok((id_account, exists))
     }
 
     pub fn next_account_id(&self, seed: &str) -> anyhow::Result<u32> {

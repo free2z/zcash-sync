@@ -27,7 +27,19 @@ fn to_c_str(s: String) -> *mut c_char {
 }
 
 fn try_init_logger() {
-    android_logger::init_once(Config::default().with_min_level(Level::Info));
+    android_logger::init_once(
+        Config::default()
+            // .format(|buf, record| {
+            //     writeln!(
+            //         buf,
+            //         "{:?}-{:?}: {}",
+            //         record.file(),
+            //         record.line(),
+            //         record.args()
+            //     )
+            // })
+            .with_min_level(Level::Info),
+    );
 }
 
 fn log_result<T: Default>(result: anyhow::Result<T>) -> T {
@@ -69,9 +81,8 @@ fn encode_tx_result(res: anyhow::Result<Vec<u8>>) -> Vec<u8> {
 pub unsafe extern "C" fn init_wallet(db_path: *mut c_char) {
     try_init_logger();
     from_c_str!(db_path);
-    let db_path = db_path.to_string();
-    init_coin(0, &Path::new(&db_path).join("zec.db").to_string_lossy());
-    init_coin(1, &Path::new(&db_path).join("yec.db").to_string_lossy());
+    let _ = init_coin(0, &format!("{}/zec.db", &db_path));
+    let _ = init_coin(1, &format!("{}/yec.db", &db_path));
 }
 
 #[no_mangle]
@@ -101,7 +112,12 @@ pub unsafe extern "C" fn reset_app() {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn new_account(coin: u8, name: *mut c_char, data: *mut c_char, index: i32) {
+pub unsafe extern "C" fn new_account(
+    coin: u8,
+    name: *mut c_char,
+    data: *mut c_char,
+    index: i32,
+) -> u32 {
     from_c_str!(name);
     from_c_str!(data);
     let data = if !data.is_empty() {
@@ -110,16 +126,16 @@ pub unsafe extern "C" fn new_account(coin: u8, name: *mut c_char, data: *mut c_c
         None
     };
     let index = if index >= 0 { Some(index as u32) } else { None };
-    let res = || crate::api::account::new_account(coin, &name, data, index);
-    log_result(res())
+    let res = crate::api::account::new_account(coin, &name, data, index);
+    log_result(res)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn new_sub_account(coin: u8, id: u32, name: *mut c_char, index: i32) {
+pub unsafe extern "C" fn new_sub_account(name: *mut c_char, index: i32) -> u32 {
     from_c_str!(name);
     let index = if index >= 0 { Some(index as u32) } else { None };
-    let res = || crate::api::account::new_sub_account(coin, id, &name, index);
-    log_result(res())
+    let res = crate::api::account::new_sub_account(&name, index);
+    log_result(res)
 }
 
 #[tokio::main]
@@ -228,8 +244,8 @@ pub async unsafe extern "C" fn send_multi_payment(
 
 #[tokio::main]
 #[no_mangle]
-pub async unsafe extern "C" fn skip_to_last_height() {
-    let res = crate::api::sync::skip_to_last_height().await;
+pub async unsafe extern "C" fn skip_to_last_height(coin: u8) {
+    let res = crate::api::sync::skip_to_last_height(coin).await;
     log_result(res)
 }
 
@@ -263,8 +279,12 @@ pub unsafe extern "C" fn get_mempool_balance() -> i64 {
 
 #[tokio::main]
 #[no_mangle]
-pub async unsafe extern "C" fn get_taddr_balance() -> u64 {
-    let res = crate::api::account::get_taddr_balance().await;
+pub async unsafe extern "C" fn get_taddr_balance(coin: u8, id_account: u32) -> u64 {
+    let res = if coin == 0xFF {
+        crate::api::account::get_taddr_balance_default().await
+    } else {
+        crate::api::account::get_taddr_balance(coin, id_account).await
+    };
     log_result(res)
 }
 
@@ -277,8 +297,8 @@ pub async unsafe extern "C" fn shield_taddr() -> *mut c_char {
 
 #[tokio::main]
 #[no_mangle]
-pub async unsafe extern "C" fn scan_transparent_accounts(gap_limit: usize) {
-    let res = crate::api::account::scan_transparent_accounts(gap_limit).await;
+pub async unsafe extern "C" fn scan_transparent_accounts(gap_limit: u32) {
+    let res = crate::api::account::scan_transparent_accounts(gap_limit as usize).await;
     log_result(res)
 }
 
@@ -416,8 +436,8 @@ pub unsafe extern "C" fn truncate_data() {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn delete_account(account: u32) {
-    let res = crate::api::account::delete_account(account);
+pub unsafe extern "C" fn delete_account(coin: u8, account: u32) {
+    let res = crate::api::account::delete_account(coin, account);
     log_result(res)
 }
 

@@ -1,3 +1,4 @@
+use crate::coinconfig::CoinConfig;
 use crate::{
     AddressList, CompactTxStreamerClient, DbAdapter, GetAddressUtxosArg, GetAddressUtxosReply,
 };
@@ -46,12 +47,12 @@ pub async fn get_utxos(
 pub async fn scan_transparent_accounts(
     network: &Network,
     client: &mut CompactTxStreamerClient<Channel>,
-    db: &DbAdapter,
-    account: u32,
     gap_limit: usize,
 ) -> anyhow::Result<()> {
+    let c = CoinConfig::get_active();
     let mut addresses = vec![];
-    let (seed, mut index) = db.get_seed(account)?;
+    let db = c.db()?;
+    let (seed, mut index) = db.get_seed(c.id_account)?;
     if let Some(seed) = seed {
         let mut gap = 0;
         while gap < gap_limit {

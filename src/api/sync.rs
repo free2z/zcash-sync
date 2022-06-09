@@ -50,8 +50,12 @@ pub async fn get_latest_height() -> anyhow::Result<u32> {
     Ok(last_height)
 }
 
-pub async fn skip_to_last_height() -> anyhow::Result<()> {
-    let c = CoinConfig::get_active();
+pub async fn skip_to_last_height(coin: u8) -> anyhow::Result<()> {
+    let c = if coin == 0xFF {
+        CoinConfig::get_active()
+    } else {
+        CoinConfig::get(coin)
+    };
     let mut client = c.connect_lwd().await?;
     let last_height = crate::chain::get_latest_height(&mut client).await?;
     fetch_and_store_tree_state(&mut client, last_height).await?;

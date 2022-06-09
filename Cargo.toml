@@ -10,17 +10,21 @@ edition = "2018"
 name = "scan_all"
 harness = false
 
-[[bin]]
-name = "warp-cli"
-path = "src/main/warp_cli.rs"
+#[[bin]]
+#name = "warp-cli"
+#path = "src/main/warp_cli.rs"
 
 #[[bin]]
 #name = "ledger"
 #path = "src/main/ledger.rs"
 
-[[bin]]
-name = "sign"
-path = "src/main/sign.rs"
+#[[bin]]
+#name = "sign"
+#path = "src/main/sign.rs"
+
+[lib]
+name = "warp_api_ffi"
+crate-type = ["rlib"]
 
 [dependencies]
 dotenv = "0.15.0"

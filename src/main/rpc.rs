@@ -101,7 +101,8 @@ pub fn new_account(seed: Json<AccountSeed>) -> Result<String, Error> {
         seed.coin,
         &seed.name,
         seed.key.clone(),
-        seed.index,
+        seed.sindex,
+        seed.aindex,
     )?;
     warp_api_ffi::set_active_account(seed.coin, id_account);
     Ok(id_account.to_string())
@@ -296,7 +297,8 @@ pub struct AccountSeed {
     coin: u8,
     name: String,
     key: Option<String>,
-    index: Option<u32>,
+    sindex: Option<u32>,
+    aindex: Option<u32>,
 }
 
 #[derive(Serialize)]

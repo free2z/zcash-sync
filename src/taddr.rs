@@ -50,17 +50,17 @@ pub async fn scan_transparent_accounts(
     let c = CoinConfig::get_active();
     let mut addresses = vec![];
     let db = c.db()?;
-    let (seed, mut index) = db.get_seed(c.id_account)?;
+    let (seed, _sindex, mut aindex) = db.get_seed(c.id_account)?;
     if let Some(seed) = seed {
         let mut gap = 0;
         while gap < gap_limit {
-            let bip44_path = format!("m/44'/{}'/0'/0/{}", network.coin_type(), index);
-            log::info!("{} {}", index, bip44_path);
+            let bip44_path = format!("m/44'/{}'/0'/0/{}", network.coin_type(), aindex);
+            log::info!("{} {}", aindex, bip44_path);
             let (_, address) = derive_tkeys(network, &seed, &bip44_path)?;
             let balance = get_taddr_balance(client, &address).await?;
             if balance > 0 {
                 addresses.push(TBalance {
-                    index,
+                    index: aindex,
                     address,
                     balance,
                 });
@@ -68,7 +68,7 @@ pub async fn scan_transparent_accounts(
             } else {
                 gap += 1;
             }
-            index += 1;
+            aindex += 1;
         }
     }
     db.store_t_scan(&addresses)?;

@@ -11,11 +11,13 @@ typedef char bool;
 #endif
 typedef void *DartPostCObjectFnType;
 
+#define QR_DATA_SIZE 256
+
 void dummy_export(void);
 
-void deallocate_str(char *s);
-
 void dart_post_cobject(DartPostCObjectFnType ptr);
+
+void deallocate_str(char *s);
 
 bool get_error(void);
 
@@ -31,9 +33,11 @@ void set_coin_lwd_url(uint8_t coin, char *lwd_url);
 
 void reset_app(void);
 
-uint32_t new_account(uint8_t coin, char *name, char *data, int32_t index);
+uint32_t new_account(uint8_t coin, char *name, char *data, int32_t sindex, int32_t aindex);
 
-uint32_t new_sub_account(char *name, int32_t index);
+uint32_t new_sub_account(char *name, int32_t sindex);
+
+uint32_t new_sub_address(char *name, int32_t sindex, int32_t aindex);
 
 uint8_t warp(uint8_t coin, bool get_tx, uint32_t anchor_offset, int64_t port);
 
@@ -104,4 +108,4 @@ char *split_data(uint32_t id, char *data);
 
 char *merge_data(char *drop);
 
-char *get_tx_summary(char *drop);
+char *get_tx_summary(char *tx);

@@ -64,7 +64,8 @@ pub struct AccountBackup {
     pub coin: u8,
     pub name: String,
     pub seed: Option<String>,
-    pub index: u32,
+    pub sindex: u32,
+    pub aindex: u32,
     pub z_sk: Option<String>,
     pub ivk: String,
     pub z_addr: String,
@@ -87,12 +88,7 @@ impl DbAdapter {
         let tx = self.connection.transaction()?;
         Ok(tx)
     }
-    //
-    // pub fn commit(&self) -> anyhow::Result<()> {
-    //     self.connection.execute("COMMIT", [])?;
-    //     Ok(())
-    // }
-    //
+
     pub fn init_db(&self) -> anyhow::Result<()> {
         migration::init_db(&self.connection)?;
         Ok(())
@@ -107,7 +103,8 @@ impl DbAdapter {
         &self,
         name: &str,
         seed: Option<&str>,
-        index: u32,
+        sindex: u32,
+        aindex: u32,
         sk: Option<&str>,
         ivk: &str,
         address: &str,
@@ -117,9 +114,9 @@ impl DbAdapter {
             .prepare("SELECT id_account FROM accounts WHERE ivk = ?1")?;
         let exists = statement.exists(params![ivk])?;
         self.connection.execute(
-            "INSERT INTO accounts(name, seed, aindex, sk, ivk, address) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO accounts(name, seed, sindex, aindex, sk, ivk, address) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             ON CONFLICT DO NOTHING",
-            params![name, seed, index, sk, ivk, address],
+            params![name, seed, sindex, aindex, sk, ivk, address],
         )?;
         let id_account: u32 = self.connection.query_row(
             "SELECT id_account FROM accounts WHERE ivk = ?1",
@@ -131,8 +128,20 @@ impl DbAdapter {
 
     pub fn next_account_id(&self, seed: &str) -> anyhow::Result<u32> {
         let index = self.connection.query_row(
-            "SELECT MAX(aindex) FROM accounts WHERE seed = ?1",
+            "SELECT MAX(sindex) FROM accounts WHERE seed = ?1",
             [seed],
+            |row| {
+                let sindex: Option<i32> = row.get(0)?;
+                Ok(sindex.unwrap_or(-1))
+            },
+        )? + 1;
+        Ok(index as u32)
+    }
+
+    pub fn next_address_id(&self, seed: &str, sindex: u32) -> anyhow::Result<u32> {
+        let index = self.connection.query_row(
+            "SELECT MAX(aindex) FROM accounts WHERE seed = ?1 AND sindex = ?2",
+            params![seed, sindex],
             |row| {
                 let aindex: Option<i32> = row.get(0)?;
                 Ok(aindex.unwrap_or(-1))
@@ -599,19 +608,20 @@ impl DbAdapter {
         Ok((seed, sk, ivk))
     }
 
-    pub fn get_seed(&self, account: u32) -> anyhow::Result<(Option<String>, u32)> {
+    pub fn get_seed(&self, account: u32) -> anyhow::Result<(Option<String>, u32, u32)> {
         log::info!("+get_seed");
-        let (seed, index) = self.connection.query_row(
-            "SELECT seed, aindex FROM accounts WHERE id_account = ?1",
+        let (seed, sindex, aindex) = self.connection.query_row(
+            "SELECT seed, sindex, aindex FROM accounts WHERE id_account = ?1",
             params![account],
             |row| {
                 let sk: Option<String> = row.get(0)?;
-                let index: u32 = row.get(1)?;
-                Ok((sk, index))
+                let sindex: u32 = row.get(1)?;
+                let aindex: u32 = row.get(1)?;
+                Ok((sk, sindex, aindex))
             },
         )?;
         log::info!("-get_seed");
-        Ok((seed, index))
+        Ok((seed, sindex, aindex))
     }
 
     pub fn get_sk(&self, account: u32) -> anyhow::Result<String> {
@@ -719,9 +729,14 @@ impl DbAdapter {
     }
 
     pub fn create_taddr(&self, account: u32) -> anyhow::Result<()> {
-        let (seed, index) = self.get_seed(account)?;
+        let (seed, sindex, aindex) = self.get_seed(account)?;
         if let Some(seed) = seed {
-            let bip44_path = format!("m/44'/{}'/0'/0/{}", self.network().coin_type(), index);
+            let bip44_path = format!(
+                "m/44'/{}'/{}'/0/{}",
+                self.network().coin_type(),
+                sindex,
+                aindex
+            );
             let (sk, address) = derive_tkeys(self.network(), &seed, &bip44_path)?;
             self.connection.execute(
                 "INSERT INTO taddrs(account, sk, address) VALUES (?1, ?2, ?3) \
@@ -836,28 +851,25 @@ impl DbAdapter {
     }
 
     pub fn get_full_backup(&self) -> anyhow::Result<Vec<AccountBackup>> {
-        let _ = self.connection.execute(
-            "ALTER TABLE accounts ADD COLUMN aindex INT NOT NULL DEFAULT 0",
-            [],
-        ); // ignore error
-
         let mut statement = self.connection.prepare(
-            "SELECT name, seed, aindex, a.sk AS z_sk, ivk, a.address AS z_addr, t.sk as t_sk, t.address AS t_addr FROM accounts a LEFT JOIN taddrs t ON a.id_account = t.account")?;
+            "SELECT name, seed, sindex, aindex, a.sk AS z_sk, ivk, a.address AS z_addr, t.sk as t_sk, t.address AS t_addr FROM accounts a LEFT JOIN taddrs t ON a.id_account = t.account")?;
         let rows = statement.query_map([], |r| {
             let name: String = r.get(0)?;
             let seed: Option<String> = r.get(1)?;
-            let index: u32 = r.get(2)?;
-            let z_sk: Option<String> = r.get(3)?;
-            let ivk: String = r.get(4)?;
-            let z_addr: String = r.get(5)?;
-            let t_sk: Option<String> = r.get(6)?;
-            let t_addr: Option<String> = r.get(7)?;
+            let sindex: u32 = r.get(2)?;
+            let aindex: u32 = r.get(3)?;
+            let z_sk: Option<String> = r.get(4)?;
+            let ivk: String = r.get(5)?;
+            let z_addr: String = r.get(6)?;
+            let t_sk: Option<String> = r.get(7)?;
+            let t_addr: Option<String> = r.get(8)?;
             let coin = get_coin_id_by_address(&z_addr);
             Ok(AccountBackup {
                 coin,
                 name,
                 seed,
-                index,
+                sindex,
+                aindex,
                 z_sk,
                 ivk,
                 z_addr,
@@ -878,8 +890,8 @@ impl DbAdapter {
             log::info!("{} {} {}", a.name, a.coin, coin);
             if a.coin == coin {
                 let do_insert = || {
-                    self.connection.execute("INSERT INTO accounts(name, seed, aindex, sk, ivk, address) VALUES (?1,?2,?3,?4,?5,?6)",
-                                            params![a.name, a.seed, a.index, a.z_sk, a.ivk, a.z_addr])?;
+                    self.connection.execute("INSERT INTO accounts(name, seed, sindex, aindex, sk, ivk, address) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                                            params![a.name, a.seed, a.sindex, a.aindex, a.z_sk, a.ivk, a.z_addr])?;
                     let id_account = self.connection.last_insert_rowid() as u32;
                     if let Some(t_addr) = &a.t_addr {
                         self.connection.execute(

@@ -14,12 +14,13 @@ use zcash_primitives::zip32::{ChildIndex, ExtendedFullViewingKey, ExtendedSpendi
 pub fn decode_key(
     coin: u8,
     key: &str,
-    index: u32,
+    sindex: u32,
+    aindex: u32,
 ) -> anyhow::Result<(Option<String>, Option<String>, String, String)> {
     let c = CoinConfig::get(coin);
     let network = c.chain.network();
     let res = if let Ok(mnemonic) = Mnemonic::from_phrase(key, Language::English) {
-        let (sk, ivk, pa) = derive_secret_key(network, &mnemonic, index)?;
+        let (sk, ivk, pa) = derive_secret_key(network, &mnemonic, sindex, aindex)?;
         Ok((Some(key.to_string()), Some(sk), ivk, pa))
     } else if let Ok(Some(sk)) =
         decode_extended_spending_key(network.hrp_sapling_extended_spending_key(), key)
@@ -66,14 +67,15 @@ pub fn is_valid_address(coin: u8, address: &str) -> bool {
 fn derive_secret_key(
     network: &Network,
     mnemonic: &Mnemonic,
-    index: u32,
+    _sindex: u32, // derivation ignore sub account index for compatibility with legacy wallets
+    aindex: u32,
 ) -> anyhow::Result<(String, String, String)> {
     let seed = Seed::new(mnemonic, "");
     let master = ExtendedSpendingKey::master(seed.as_bytes());
     let path = [
         ChildIndex::Hardened(32),
         ChildIndex::Hardened(network.coin_type()),
-        ChildIndex::Hardened(index),
+        ChildIndex::Hardened(aindex),
     ];
     let extsk = ExtendedSpendingKey::from_path(&master, &path);
     let sk = encode_extended_spending_key(network.hrp_sapling_extended_spending_key(), &extsk);

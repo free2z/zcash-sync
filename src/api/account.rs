@@ -13,7 +13,8 @@ pub fn new_account(
     coin: u8,
     name: &str,
     key: Option<String>,
-    index: Option<u32>,
+    sindex: Option<u32>,
+    aindex: Option<u32>,
 ) -> anyhow::Result<u32> {
     let key = match key {
         Some(key) => key,
@@ -24,27 +25,57 @@ pub fn new_account(
             mnemonic.phrase().to_string()
         }
     };
-    let id_account = new_account_with_key(coin, name, &key, index.unwrap_or(0))?;
+    let id_account =
+        new_account_with_key(coin, name, &key, sindex.unwrap_or(0), aindex.unwrap_or(0))?;
     Ok(id_account)
 }
 
-pub fn new_sub_account(name: &str, index: Option<u32>) -> anyhow::Result<u32> {
+pub fn new_sub_account(name: &str, sindex: Option<u32>) -> anyhow::Result<u32> {
     let c = CoinConfig::get_active();
     let db = c.db()?;
-    let (seed, _) = db.get_seed(c.id_account)?;
+    let (seed, _, _) = db.get_seed(c.id_account)?;
     let seed = seed.ok_or_else(|| anyhow!("Account has no seed"))?;
-    let index = index.unwrap_or_else(|| db.next_account_id(&seed).unwrap());
+    let sindex = sindex.unwrap_or_else(|| db.next_account_id(&seed).unwrap());
     drop(db);
-    let id_account = new_account_with_key(c.coin, name, &seed, index)?;
+    let id_account = new_account_with_key(c.coin, name, &seed, sindex, 0)?;
     Ok(id_account)
 }
 
-fn new_account_with_key(coin: u8, name: &str, key: &str, index: u32) -> anyhow::Result<u32> {
-    let c = CoinConfig::get(coin);
-    let (seed, sk, ivk, pa) = decode_key(coin, key, index)?;
+pub fn new_sub_address(
+    name: &str,
+    sindex: Option<u32>,
+    aindex: Option<u32>,
+) -> anyhow::Result<u32> {
+    let c = CoinConfig::get_active();
     let db = c.db()?;
-    let (account, exists) =
-        db.store_account(name, seed.as_deref(), index, sk.as_deref(), &ivk, &pa)?;
+    let (seed, current_sindex, _) = db.get_seed(c.id_account)?;
+    let seed = seed.ok_or_else(|| anyhow!("Account has no seed"))?;
+    let sindex = sindex.unwrap_or(current_sindex);
+    let aindex = aindex.unwrap_or_else(|| db.next_address_id(&seed, sindex).unwrap());
+    drop(db);
+    let id_account = new_account_with_key(c.coin, name, &seed, sindex, aindex)?;
+    Ok(id_account)
+}
+
+fn new_account_with_key(
+    coin: u8,
+    name: &str,
+    key: &str,
+    sindex: u32,
+    aindex: u32,
+) -> anyhow::Result<u32> {
+    let c = CoinConfig::get(coin);
+    let (seed, sk, ivk, pa) = decode_key(coin, key, sindex, aindex)?;
+    let db = c.db()?;
+    let (account, exists) = db.store_account(
+        name,
+        seed.as_deref(),
+        sindex,
+        aindex,
+        sk.as_deref(),
+        &ivk,
+        &pa,
+    )?;
     if !exists {
         db.create_taddr(account)?;
     }

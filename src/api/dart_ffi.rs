@@ -141,7 +141,8 @@ pub unsafe extern "C" fn new_account(
     coin: u8,
     name: *mut c_char,
     data: *mut c_char,
-    index: i32,
+    sindex: i32,
+    aindex: i32,
 ) -> u32 {
     from_c_str!(name);
     from_c_str!(data);
@@ -150,16 +151,46 @@ pub unsafe extern "C" fn new_account(
     } else {
         None
     };
-    let index = if index >= 0 { Some(index as u32) } else { None };
-    let res = crate::api::account::new_account(coin, &name, data, index);
+    let sindex = if sindex >= 0 {
+        Some(sindex as u32)
+    } else {
+        None
+    };
+    let aindex = if aindex >= 0 {
+        Some(aindex as u32)
+    } else {
+        None
+    };
+    let res = crate::api::account::new_account(coin, &name, data, sindex, aindex);
     log_result(res)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn new_sub_account(name: *mut c_char, index: i32) -> u32 {
+pub unsafe extern "C" fn new_sub_account(name: *mut c_char, sindex: i32) -> u32 {
     from_c_str!(name);
-    let index = if index >= 0 { Some(index as u32) } else { None };
-    let res = crate::api::account::new_sub_account(&name, index);
+    let sindex = if sindex >= 0 {
+        Some(sindex as u32)
+    } else {
+        None
+    };
+    let res = crate::api::account::new_sub_account(&name, sindex);
+    log_result(res)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn new_sub_address(name: *mut c_char, sindex: i32, aindex: i32) -> u32 {
+    from_c_str!(name);
+    let sindex = if sindex >= 0 {
+        Some(sindex as u32)
+    } else {
+        None
+    };
+    let aindex = if aindex >= 0 {
+        Some(aindex as u32)
+    } else {
+        None
+    };
+    let res = crate::api::account::new_sub_address(&name, sindex, aindex);
     log_result(res)
 }
 

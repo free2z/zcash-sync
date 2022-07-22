@@ -1,7 +1,35 @@
 #![allow(non_snake_case)]
+// use crate::coinconfig::{init_coin, CoinConfig};
+// use crate::db::{AccountRec, DbAdapter, TxRec};
+
 use lazy_static::lazy_static;
 use node_bindgen::derive::node_bindgen;
 use std::sync::atomic::AtomicBool;
+
+use std::convert::TryInto;
+
+// use rocket::serde::{json::Json, Deserialize, Serialize};
+// use warp_api_ffi::{get_best_server, AccountRec, CoinConfig, RaptorQDrops, Tx, TxRec};
+// use thiserror::Error;
+// use anyhow::Error;
+
+
+fn log_result<T: Default>(result: anyhow::Result<T>) -> T {
+    match result {
+        Err(err) => {
+            log::error!("{}", err);
+            // let last_error = LAST_ERROR.lock().unwrap();
+            // last_error.replace(err.to_string());
+            // IS_ERROR.store(true, Ordering::Release);
+            T::default()
+        }
+        Ok(v) => {
+            // IS_ERROR.store(false, Ordering::Release);
+            v
+        }
+    }
+}
+
 
 
 fn log_string(result: anyhow::Result<String>) -> String {
@@ -32,6 +60,33 @@ fn initCoin(coin: u32, db_path: String, lwd_url: String) {
 #[node_bindgen]
 fn newAccount(coin: u32, name: String) {
     crate::api::account::new_account(coin as u8, &name, None, None).unwrap();
+}
+
+// //
+// #[node_bindgen]
+// fn list_accounts() -> Result<Json<Vec<AccountRec>>, Error> {
+//     let c = CoinConfig::get_active();
+//     let db = c.db()?;
+//     let accounts = db.get_accounts()?;
+//     Ok(Json(accounts))
+// }
+
+
+// #[node_bindgen]
+// fn list_accounts() {
+//     let cc = CoinConfig::get_active();
+//     // let cc = crate::coinconfig::get_active();
+//     let db = cc.db();
+//     // let accounts = db.get_accounts();
+//     // accounts
+// }
+
+#[tokio::main]
+#[node_bindgen]
+async fn get_latest_height() -> i32 {
+    let height = crate::api::sync::get_latest_height().await;
+    // let height = height as u32;
+    log_result(height).try_into().unwrap()
 }
 
 lazy_static! {

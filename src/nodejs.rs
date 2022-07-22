@@ -3,6 +3,24 @@ use lazy_static::lazy_static;
 use node_bindgen::derive::node_bindgen;
 use std::sync::atomic::AtomicBool;
 
+
+fn log_string(result: anyhow::Result<String>) -> String {
+    match result {
+        Err(err) => {
+            log::error!("{}", err);
+            // let last_error = LAST_ERROR.lock().unwrap();
+            // last_error.replace(err.to_string());
+            // IS_ERROR.store(true, Ordering::Release);
+            format!("{}", err)
+        }
+        Ok(v) => {
+            // IS_ERROR.store(false, Ordering::Release);
+            v
+        }
+    }
+}
+
+
 #[node_bindgen]
 fn initCoin(coin: u32, db_path: String, lwd_url: String) {
     let coin = coin as u8;
@@ -39,4 +57,15 @@ fn getLWDURL(coin: u32) -> String {
 fn isValidAddress(coin: u32, address: String) -> bool {
     let coin = coin as u8;
     crate::key2::is_valid_address(coin, &address)
+}
+
+#[node_bindgen]
+fn make_payment_uri(
+    address: String,
+    amount: u32,
+    memo: String,
+) -> String {
+    let amount = amount as u64;
+    let res = crate::api::payment_uri::make_payment_uri(&address, amount, &memo);
+    log_string(res)
 }

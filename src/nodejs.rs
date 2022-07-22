@@ -25,7 +25,13 @@ async fn warp(coin: u32) {
 }
 
 #[node_bindgen]
-fn getLWDURL(coin: u32) -> std::string::String {
+fn getLWDURL(coin: u32) -> String {
     let coin = coin as u8;
     return crate::coinconfig::get_coin_lwd_url(coin);
+}
+
+#[node_bindgen]
+fn isValidAddress(coin: u32, address: String) -> bool {
+    let coin = coin as u8;
+    crate::key2::is_valid_address(coin, &address)
 }

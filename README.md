@@ -58,3 +58,11 @@ crate-type = ["cdylib"]
 $ nj-cli build --release -- --features=nodejs
 $ node warp.js
 ```
+
+To build clean,
+
+```
+rm Cargo.lock
+cargo clean
+nj-cli build --release -- --features=nodejs
+```

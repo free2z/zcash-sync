@@ -81,7 +81,9 @@ android_logger = { version = "0.10.0", optional = true }
 rocket = { version = "0.5.0-rc.2", features = ["json"], optional = true }
 dotenv = { version = "0.15.0", optional = true }
 
-node-bindgen = { version = "4.0", optional = true }
+# node-bindgen = { version = "4.1.0", optional = true }
+node-bindgen = { git = "https://github.com/infinyon/node-bindgen", rev = "cf382ddfa4bf0d82a8103aaa4659aec79c825010", optional = true }
+
 
 [features]
 ledger = ["ledger-apdu", "hmac", "ed25519-bip32", "ledger-transport-hid"]
@@ -124,7 +126,8 @@ rev = "466806932d21597eb4f89a449347fa1983dffb22"
 [build-dependencies]
 tonic-build = "0.7.2"
 cbindgen = "0.19.0"
-node-bindgen = { version = "4.0", default-features = false, features = ["build"] }
+# node-bindgen = { version = "4.1.0", default-features = false, features = ["build"] }
+node-bindgen = { git = "https://github.com/infinyon/node-bindgen", rev = "cf382ddfa4bf0d82a8103aaa4659aec79c825010", features = ["build"] }
 
 
 [dev-dependencies]

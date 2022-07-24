@@ -1,4 +1,4 @@
-#![allow(non_snake_case)]
+// #![allow(non_snake_case)]
 // use crate::coinconfig::{init_coin, CoinConfig};
 // use crate::db::{AccountRec, DbAdapter, TxRec};
 
@@ -50,7 +50,7 @@ fn log_string(result: anyhow::Result<String>) -> String {
 
 
 #[node_bindgen]
-fn initCoin(coin: u32, db_path: String, lwd_url: String) {
+fn init_coin(coin: u32, db_path: String, lwd_url: String) {
     let coin = coin as u8;
     log::info!("Init coin");
     crate::init_coin(coin, &db_path).unwrap();
@@ -58,8 +58,13 @@ fn initCoin(coin: u32, db_path: String, lwd_url: String) {
 }
 
 #[node_bindgen]
-fn newAccount(coin: u32, name: String) {
+fn new_account(coin: u32, name: String) {
     crate::api::account::new_account(coin as u8, &name, None, None).unwrap();
+}
+
+#[node_bindgen]
+fn set_active_account(coin: u32, id: u32) {
+    crate::coinconfig::set_active_account(coin as u8, id);
 }
 
 // //
@@ -103,13 +108,13 @@ async fn warp(coin: u32) {
 }
 
 #[node_bindgen]
-fn getLWDURL(coin: u32) -> String {
+fn get_lwd_url(coin: u32) -> String {
     let coin = coin as u8;
     return crate::coinconfig::get_coin_lwd_url(coin);
 }
 
 #[node_bindgen]
-fn isValidAddress(coin: u32, address: String) -> bool {
+fn is_valid_address(coin: u32, address: String) -> bool {
     let coin = coin as u8;
     crate::key2::is_valid_address(coin, &address)
 }

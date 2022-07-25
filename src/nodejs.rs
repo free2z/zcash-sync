@@ -1,8 +1,9 @@
 // #![allow(non_snake_case)]
 use node_bindgen::derive::node_bindgen;
+use node_bindgen::core::NjError;
 // use node_bindgen::init::node_bindgen_init_once;
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::convert::TryInto;
 
 use lazy_static::lazy_static;
@@ -112,8 +113,7 @@ async fn get_latest_height() -> i32 {
 
 lazy_static! {
     static ref SYNC_CANCELED: AtomicBool = AtomicBool::new(false);
-    // TODO: progress here?
-    // static ref WARP_OFFSET
+    static ref WARP_OFFSET: AtomicU32 = AtomicU32::new(0);
 }
 
 // TODO
@@ -137,14 +137,25 @@ lazy_static! {
 // # Entering the V8 API without proper locking in place
 // #
 //
-#[tokio::main]
-#[node_bindgen]
-async fn warpcb<F: Fn(u32) + std::marker::Send + 'static>(cb: F) {
-    crate::api::sync::coin_sync(0, true, 0, cb, &SYNC_CANCELED)
-        .await
-        .unwrap();
-}
+// #[tokio::main]
+// #[node_bindgen]
+// async fn warpcb<F: Fn(u32)>(cb: F) {
+//     // let F = F as Fn(u32) + std::marker::Send + 'static;
+//     let cb = cb as (dyn Fn(u32) + std::marker::Send + 'static);
+//     crate::api::sync::coin_sync(
+//         0, true, 0,
+//         cb,
+//         &SYNC_CANCELED)
+//         .await
+//         .unwrap();
+// }
 
+#[node_bindgen]
+fn get_sync_height() -> u32 {
+    // *WARP_OFFSET.get_mut()
+    // *WARP_OFFSET as u32
+    WARP_OFFSET.load(Ordering::Relaxed)
+}
 
 // Does not support tokio async executor atm
 #[tokio::main]
@@ -156,10 +167,35 @@ async fn warp(offset: u32) {
     // 0 == ZEC
     // true = get_tx
     //
-    crate::api::sync::coin_sync(0, true, offset, move |height| {}, &SYNC_CANCELED)
+    crate::api::sync::coin_sync(0, true, offset, move |height| {
+        WARP_OFFSET.store(height, Ordering::Release)
+    }, &SYNC_CANCELED)
         .await
         .unwrap();
 }
+
+// TODO: can't quite figure out how to get the promise back ...
+//
+// > p = warp.warprometo(0)
+// undefined
+#[tokio::main]
+#[node_bindgen]
+// async fn warpp(offset: u32) -> Result<(), NjError> {
+async fn warprometo(offset: u32) -> Result<(), NjError> {
+    // println!("sleeping");
+    // sleep(Duration::from_secs(1)).await;
+    // if arg < 0.0 {
+    //     eprintln!("throwing error");
+    //     Err(NjError::Other("arg is negative".to_owned()))
+    // } else {
+    //     println!("woke and adding 10.0");
+    //     Ok(arg + 10.0)
+    // }
+    Ok(crate::api::sync::coin_sync(0, true, offset, move |height| {
+        WARP_OFFSET.store(height, Ordering::Release)
+    }, &SYNC_CANCELED).await.unwrap())
+}
+
 
 #[node_bindgen]
 fn get_lwd_url(coin: u32) -> String {

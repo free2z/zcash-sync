@@ -9,7 +9,6 @@ use std::convert::TryInto;
 use lazy_static::lazy_static;
 // use log::{info, warn};
 
-
 // use rocket::serde::{json::Json, Deserialize, Serialize};
 // use warp_api_ffi::{get_best_server, AccountRec, CoinConfig, RaptorQDrops, Tx, TxRec};
 // use thiserror::Error;
@@ -104,16 +103,34 @@ fn set_active_account(coin: u32, id: u32) {
 
 #[tokio::main]
 #[node_bindgen]
-async fn get_latest_height() -> i32 {
+async fn get_server_height() -> i32 {
     // info!("warp.get_latest_height");
     let height = crate::api::sync::get_latest_height().await;
     // let height = height as u32;
     log_result(height).try_into().unwrap()
 }
 
+#[tokio::main]
+#[node_bindgen]
+pub async fn skip_to_last_height() {
+    let res = crate::api::sync::skip_to_last_height(0 as u8).await;
+    log_result(res)
+}
+
+
+#[tokio::main]
+#[node_bindgen]
+async fn get_sync_height() -> i32 {
+    // info!("warp.get_latest_height");
+    let height = crate::api::sync::get_synced_height();
+    // let height = height as u32;
+    log_result(height).try_into().unwrap()
+}
+
+
 lazy_static! {
     static ref SYNC_CANCELED: AtomicBool = AtomicBool::new(false);
-    static ref WARP_OFFSET: AtomicU32 = AtomicU32::new(0);
+    // static ref WARP_OFFSET: AtomicU32 = AtomicU32::new(0);
 }
 
 // TODO
@@ -150,12 +167,12 @@ lazy_static! {
 //         .unwrap();
 // }
 
-#[node_bindgen]
-fn get_sync_height() -> u32 {
-    // *WARP_OFFSET.get_mut()
-    // *WARP_OFFSET as u32
-    WARP_OFFSET.load(Ordering::Relaxed)
-}
+// #[node_bindgen]
+// fn get_sync_height() -> u32 {
+//     // *WARP_OFFSET.get_mut()
+//     // *WARP_OFFSET as u32
+//     WARP_OFFSET.load(Ordering::Relaxed)
+// }
 
 // Does not support tokio async executor atm
 #[tokio::main]
@@ -167,8 +184,8 @@ async fn warp(offset: u32) {
     // 0 == ZEC
     // true = get_tx
     //
-    crate::api::sync::coin_sync(0, true, offset, move |height| {
-        WARP_OFFSET.store(height, Ordering::Release)
+    crate::api::sync::coin_sync(0, true, offset, move |_height| {
+        // WARP_OFFSET.store(height, Ordering::Release)
     }, &SYNC_CANCELED)
         .await
         .unwrap();
@@ -191,8 +208,8 @@ async fn warprometo(offset: u32) -> Result<(), NjError> {
     //     println!("woke and adding 10.0");
     //     Ok(arg + 10.0)
     // }
-    Ok(crate::api::sync::coin_sync(0, true, offset, move |height| {
-        WARP_OFFSET.store(height, Ordering::Release)
+    Ok(crate::api::sync::coin_sync(0, true, offset, move |_height| {
+        // WARP_OFFSET.store(height, Ordering::Release)
     }, &SYNC_CANCELED).await.unwrap())
 }
 

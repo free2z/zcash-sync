@@ -128,6 +128,14 @@ async fn get_sync_height() -> i32 {
 }
 
 
+#[tokio::main]
+#[node_bindgen]
+async fn rewind_to_height(height: u32) {
+    let res = crate::api::sync::rewind_to_height(height).await;
+    log_result(res)
+}
+
+
 lazy_static! {
     static ref SYNC_CANCELED: AtomicBool = AtomicBool::new(false);
     // static ref WARP_OFFSET: AtomicU32 = AtomicU32::new(0);

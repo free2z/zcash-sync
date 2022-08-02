@@ -201,17 +201,21 @@ async fn warp(offset: u32) {
         .unwrap();
 }
 
-// TODO: can't quite figure out how to get the promise back ...
-//
-// > p = warp.warprometo(0)
+
+// TODO: this is still not async ...
+// I think we have to go to a lower level with scan::sync_async
+// But, that's at a lower level. Maybe later.
+// For now the warp sync in a fork seems _pretty_ solid :shruggie:
+// it's weird though after a bunch of gymnastics here, the
+// result is still undefined lol
+// > p = warp.prometo(0)
 // undefined
 #[tokio::main]
 #[node_bindgen]
-async fn warprometo(offset: u32) -> Result<(), NjError> {
-    Ok(crate::api::sync::coin_sync(0, true, offset, move |_height| {
-        //
-    }, &SYNC_CANCELED)
-        .await?)
+async fn prometo(offset: u32) -> Result<(), NjError> {
+    crate::api::sync::coin_sync(
+        0, true, offset, move |_height| {}, &SYNC_CANCELED
+    ).await.map_err(|e| NjError::Other(format!("{}", e)))
 }
 
 

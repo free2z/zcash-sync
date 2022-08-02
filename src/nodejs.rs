@@ -185,6 +185,7 @@ lazy_static! {
 // Does not support tokio async executor atm
 #[tokio::main]
 #[node_bindgen]
+// async fn warp(offset: u32) -> JsPromiseFuture<F> {
 async fn warp(offset: u32) {
     // YOU MUST initCoin first!!!
 // async fn warp(coin: u32, offset: u32) {
@@ -195,6 +196,7 @@ async fn warp(offset: u32) {
     crate::api::sync::coin_sync(0, true, offset, move |_height| {
         // WARP_OFFSET.store(height, Ordering::Release)
     }, &SYNC_CANCELED)
+        // TODO: better way to handle an error?
         .await
         .unwrap();
 }
@@ -205,20 +207,11 @@ async fn warp(offset: u32) {
 // undefined
 #[tokio::main]
 #[node_bindgen]
-// async fn warpp(offset: u32) -> Result<(), NjError> {
 async fn warprometo(offset: u32) -> Result<(), NjError> {
-    // println!("sleeping");
-    // sleep(Duration::from_secs(1)).await;
-    // if arg < 0.0 {
-    //     eprintln!("throwing error");
-    //     Err(NjError::Other("arg is negative".to_owned()))
-    // } else {
-    //     println!("woke and adding 10.0");
-    //     Ok(arg + 10.0)
-    // }
     Ok(crate::api::sync::coin_sync(0, true, offset, move |_height| {
-        // WARP_OFFSET.store(height, Ordering::Release)
-    }, &SYNC_CANCELED).await.unwrap())
+        //
+    }, &SYNC_CANCELED)
+        .await?)
 }
 
 

@@ -185,21 +185,24 @@ lazy_static! {
 // Does not support tokio async executor atm
 #[tokio::main]
 #[node_bindgen]
-// async fn warp(offset: u32) -> JsPromiseFuture<F> {
 async fn warp(offset: u32) {
     // YOU MUST initCoin first!!!
-// async fn warp(coin: u32, offset: u32) {
-    // info!("warp.warp started");
-    // 0 == ZEC
-    // true = get_tx
-    //
     crate::api::sync::coin_sync(0, true, offset, move |_height| {
-        // WARP_OFFSET.store(height, Ordering::Release)
     }, &SYNC_CANCELED)
         // TODO: better way to handle an error?
         .await
         .unwrap();
 }
+
+// This would only be relevant if we could use the same process?
+// But, I think we will just tell the main process to kill the warp,
+// rewind it and start again? Might be a little bit rude?
+// But, hrmmm ...
+// #[node_bindgen]
+// pub unsafe extern "C" fn cancel_warp() {
+//     log::info!("Sync canceled");
+//     SYNC_CANCELED.store(true, Ordering::Release);
+// }
 
 
 // TODO: this is still not async ...

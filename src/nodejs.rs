@@ -222,11 +222,47 @@ async fn prometo(offset: u32) -> Result<(), NjError> {
 }
 
 
+// #[tokio::main]
+// #[node_bindgen]
+// async fn send_multi_payment(
+//     recipients: String,
+//     use_transparent: bool,
+//     anchor_offset: u32,
+//     port: i64,
+// ) -> String {
+//     // from_c_str!(recipients_json);
+//     let res = async move {
+//         let height = crate::api::sync::get_latest_height().await?;
+//         // TODO: just send in already parsed?
+//         // let recipients = crate::api::payment::parse_recipients(&recipients_json)?;
+//         let res = crate::api::payment::build_sign_send_multi_payment(
+//             height,
+//             &recipients,
+//             use_transparent,
+//             anchor_offset,
+//             Box::new(move |progress| {
+//                 report_progress(progress, port);
+//             }),
+//         )
+//         .await?;
+//         Ok(res)
+//     };
+//     log_string(res.await)
+// }
+
+
+
 #[node_bindgen]
 fn get_lwd_url(coin: u32) -> String {
     // info!("warp.get_lwd_url");
     let coin = coin as u8;
     return crate::coinconfig::get_coin_lwd_url(coin);
+}
+
+#[tokio::main]
+#[node_bindgen]
+async fn get_block_by_time(time: u32) -> u32 {
+    crate::api::sync::get_block_by_time(time).await.unwrap()
 }
 
 #[node_bindgen]

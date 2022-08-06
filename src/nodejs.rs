@@ -14,6 +14,10 @@ use lazy_static::lazy_static;
 // use thiserror::Error;
 // use anyhow::Error;
 
+// use crate::wallet::RecipientMemo;
+use crate::api::payment::RecipientMemo;
+
+
 // TODO: logging!
 // https://github.com/infinyon/node-bindgen/blob/master/examples/logging/src/lib.rs
 // this doesn't seem to work :/
@@ -48,7 +52,7 @@ fn log_result<T: Default>(result: anyhow::Result<T>) -> T {
 fn log_string(result: anyhow::Result<String>) -> String {
     match result {
         Err(err) => {
-            log::error!("{}", err);
+            log::error!("{}!!!", err);
             // let last_error = LAST_ERROR.lock().unwrap();
             // last_error.replace(err.to_string());
             // IS_ERROR.store(true, Ordering::Release);
@@ -221,34 +225,48 @@ async fn prometo(offset: u32) -> Result<(), NjError> {
     ).await.map_err(|e| NjError::Other(format!("{}", e)))
 }
 
-
-// #[tokio::main]
-// #[node_bindgen]
-// async fn send_multi_payment(
-//     recipients: String,
-//     use_transparent: bool,
-//     anchor_offset: u32,
-//     port: i64,
-// ) -> String {
-//     // from_c_str!(recipients_json);
-//     let res = async move {
-//         let height = crate::api::sync::get_latest_height().await?;
-//         // TODO: just send in already parsed?
-//         // let recipients = crate::api::payment::parse_recipients(&recipients_json)?;
-//         let res = crate::api::payment::build_sign_send_multi_payment(
-//             height,
-//             &recipients,
-//             use_transparent,
-//             anchor_offset,
-//             Box::new(move |progress| {
-//                 report_progress(progress, port);
-//             }),
-//         )
-//         .await?;
-//         Ok(res)
-//     };
-//     log_string(res.await)
+// struct TestObject {
+//     val: Option<f64>,
 // }
+
+// #[node_bindgen]
+// impl RecipientMemo {
+//     #[node_bindgen(constructor)]
+//     fn new() -> Self {
+//         Self { val: None }
+//     }
+
+
+#[tokio::main]
+#[node_bindgen]
+async fn send_multi_payment(
+    // recipients: &[RecipientMemo],
+    recipients_json: String,
+    use_transparent: bool,
+    anchor_offset: u32,
+    port: i64,
+) -> String {
+    // from_c_str!(recipients_json);
+    let res = async move {
+        let height = crate::api::sync::get_latest_height().await?;
+        let recipients = crate::api::payment::parse_recipients(&recipients_json)?;
+
+        // TODO: just send in already parsed?
+        // let recipients = crate::api::payment::parse_recipients(&recipients_json)?;
+        let res = crate::api::payment::build_sign_send_multi_payment(
+            height,
+            &recipients,
+            use_transparent,
+            anchor_offset,
+            Box::new(move |progress| {
+                // report_progress(progress, port);
+            }),
+        )
+        .await?;
+        Ok(res)
+    };
+    log_string(res.await)
+}
 
 
 

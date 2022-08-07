@@ -242,9 +242,9 @@ async fn prometo(offset: u32) -> Result<(), NjError> {
 async fn send_multi_payment(
     // recipients: &[RecipientMemo],
     recipients_json: String,
-    use_transparent: bool,
-    anchor_offset: u32,
-    port: i64,
+    // use_transparent: bool,
+    // anchor_offset: u32,
+    // port: i64,
 ) -> String {
     // from_c_str!(recipients_json);
     let res = async move {
@@ -256,8 +256,8 @@ async fn send_multi_payment(
         let res = crate::api::payment::build_sign_send_multi_payment(
             height,
             &recipients,
-            use_transparent,
-            anchor_offset,
+            false, // use_transparent,
+            0,  // anchor offset
             Box::new(move |progress| {
                 // report_progress(progress, port);
             }),

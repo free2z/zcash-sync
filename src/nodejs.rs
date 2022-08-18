@@ -1,7 +1,7 @@
 // #![allow(non_snake_case)]
 use node_bindgen::derive::node_bindgen;
 use node_bindgen::core::NjError;
-// use node_bindgen::init::node_bindgen_init_once;
+use node_bindgen::init::node_bindgen_init_once;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::convert::TryInto;
@@ -16,7 +16,18 @@ use lazy_static::lazy_static;
 
 // use crate::wallet::RecipientMemo;
 use crate::api::payment::RecipientMemo;
+// use crate::{ChainError, Tx};
+use crate::{ChainError};
 
+use log::{info, warn, error};
+
+
+#[node_bindgen_init_once]
+fn init_logging() {
+    // initialize logging framework
+    env_logger::init();
+    info!("logging initialized");
+}
 
 // TODO: logging!
 // https://github.com/infinyon/node-bindgen/blob/master/examples/logging/src/lib.rs
@@ -68,6 +79,8 @@ fn log_string(result: anyhow::Result<String>) -> String {
 
 #[node_bindgen]
 fn init_coin(coin: u32, db_path: String, lwd_url: String) {
+    warn!("calling init_coin");
+
     let coin = coin as u8;
     // info!("Init coin");
     crate::init_coin(coin, &db_path).unwrap();
@@ -186,16 +199,62 @@ lazy_static! {
 //     WARP_OFFSET.load(Ordering::Relaxed)
 // }
 
+#[tokio::main]
+#[node_bindgen]
+async fn warp() {
+    crate::api::sync::coin_sync(
+        // zec, use transparent, 0 offset
+        0, true, 0,
+        move |_height| {
+        //
+        },
+        &SYNC_CANCELED
+    ).await.unwrap();
+}
+
+
 // Does not support tokio async executor atm
 #[tokio::main]
 #[node_bindgen]
-async fn warp(offset: u32) {
+async fn warp_handle() -> u8 {
+    error!("Calling warp!");
+    warn!("warn");
+    info!("yo info");
+
     // YOU MUST initCoin first!!!
-    crate::api::sync::coin_sync(0, true, offset, move |_height| {
-    }, &SYNC_CANCELED)
-        // TODO: better way to handle an error?
-        .await
-        .unwrap();
+    let res = async {
+        let result = crate::api::sync::coin_sync(
+            // zec, use transparent, 0 offset
+            0, true, 0,
+            move |_height| {
+            //
+            },
+            &SYNC_CANCELED
+        ).await;
+
+        // what's this about?
+        // need an active account to run this one?
+        // crate::api::mempool::scan().await?;
+
+        match result {
+            Ok(_) => Ok(0),
+            Err(err) => {
+                if let Some(e) = err.downcast_ref::<ChainError>() {
+                    match e {
+                        ChainError::Reorg => Ok(1),
+                        ChainError::Busy => Ok(2),
+                    }
+                } else {
+                    log::error!("Non-chain error: {}", err);
+                    // 11111111
+                    Ok(0xFF)
+                }
+            }
+        }
+    };
+    let r = res.await;
+    SYNC_CANCELED.store(false, Ordering::Release);
+    log_result(r)
 }
 
 // This would only be relevant if we could use the same process?
@@ -258,7 +317,7 @@ async fn send_multi_payment(
             &recipients,
             false, // use_transparent,
             0,  // anchor offset
-            Box::new(move |progress| {
+            Box::new(move |_progress| {
                 // report_progress(progress, port);
             }),
         )

@@ -1,26 +1,35 @@
 use crate::builder::BlockProcessor;
-use crate::chain::{Nf, NfRef};
-use crate::db::{DbAdapter, ReceivedNote};
+use crate::chain::{DecryptedBlock, Nf, NfRef, TRIAL_DECRYPTIONS};
+use crate::db::{AccountViewKey, DbAdapter, PlainNote, ReceivedNote};
+use std::cmp::Ordering;
 
 use crate::transaction::retrieve_tx_info;
 use crate::{
-    connect_lightwalletd, download_chain, get_latest_height, CompactBlock, DecryptNode, Witness,
+    connect_lightwalletd, download_chain, get_latest_height, CompactBlock, CompactSaplingOutput,
+    CompactTx, DecryptNode, Witness,
 };
 use ff::PrimeField;
 
-use std::cmp::Ordering;
+use anyhow::anyhow;
+use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::panic;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::runtime::{Builder, Runtime};
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use zcash_client_backend::encoding::decode_extended_full_viewing_key;
 use zcash_params::coin::{get_coin_chain, CoinType};
+use zcash_primitives::consensus::{Network, Parameters};
 
-use zcash_primitives::sapling::Node;
+use zcash_primitives::sapling::{Node, Note};
 
 pub struct Blocks(pub Vec<CompactBlock>);
+
+lazy_static! {
+    static ref DECRYPTER_RUNTIME: Runtime = Builder::new_multi_thread().build().unwrap();
+}
 
 #[derive(Debug)]
 struct TxIdSet(Vec<u32>);
@@ -41,16 +50,15 @@ pub struct TxIdHeight {
     index: u32,
 }
 
-pub const MAX_OUTPUTS_PER_CHUNK: usize = 200_000;
-
 pub async fn sync_async(
     coin_type: CoinType,
     _chunk_size: u32,
     get_tx: bool,
     db_path: &str,
     target_height_offset: u32,
+    max_cost: u32,
     progress_callback: AMProgressCallback,
-    cancel: &'static AtomicBool,
+    cancel: &'static std::sync::Mutex<bool>,
     ld_url: &str,
 ) -> anyhow::Result<()> {
     let ld_url = ld_url.to_owned();
@@ -68,15 +76,18 @@ pub async fn sync_async(
         let vks = db.get_fvks()?;
         (height, hash, vks)
     };
+
     let end_height = get_latest_height(&mut client).await?;
     let end_height = (end_height - target_height_offset).max(start_height);
     if start_height >= end_height {
         return Ok(());
     }
+    let n_ivks = vks.len();
 
     let decrypter = DecryptNode::new(vks);
 
-    let (processor_tx, mut processor_rx) = mpsc::channel::<Blocks>(1);
+    let (decryptor_tx, mut decryptor_rx) = mpsc::channel::<Blocks>(1);
+    let (processor_tx, mut processor_rx) = mpsc::channel::<Vec<DecryptedBlock>>(1);
 
     let db_path2 = db_path.clone();
 
@@ -84,10 +95,12 @@ pub async fn sync_async(
         log::info!("download_scheduler");
         download_chain(
             &mut client,
+            n_ivks,
             start_height,
             end_height,
             prev_hash,
-            processor_tx,
+            max_cost,
+            decryptor_tx,
             cancel,
         )
         .await?;
@@ -96,19 +109,29 @@ pub async fn sync_async(
 
     let proc_callback = progress_callback.clone();
 
+    let decryptor = DECRYPTER_RUNTIME.spawn(async move {
+        while let Some(blocks) = decryptor_rx.recv().await {
+            let dec_blocks = decrypter.decrypt_blocks(&network, blocks.0); // this function may block
+            let batch_decrypt_elapsed: usize = dec_blocks.iter().map(|b| b.elapsed).sum();
+            log::info!("  Batch Decrypt: {} ms", batch_decrypt_elapsed);
+            let _ = processor_tx.send(dec_blocks).await;
+        }
+        Ok::<_, anyhow::Error>(())
+    });
+
     let processor = tokio::spawn(async move {
         let mut db = DbAdapter::new(coin_type, &db_path2)?;
         let mut nfs = db.get_nullifiers()?;
 
-        while let Some(blocks) = processor_rx.recv().await {
-            if blocks.0.is_empty() {
+        while let Some(dec_blocks) = processor_rx.recv().await {
+            if dec_blocks.is_empty() {
                 continue;
             }
             let (mut tree, witnesses) = db.get_tree()?;
             let mut bp = BlockProcessor::new(&tree, &witnesses);
             let mut absolute_position_at_block_start = tree.get_position();
 
-            log::info!("start processing - {}", blocks.0[0].height);
+            log::info!("start processing - {}", dec_blocks[0].height);
             log::info!("Time {:?}", chrono::offset::Local::now());
             let start = Instant::now();
 
@@ -118,9 +141,14 @@ pub async fn sync_async(
             {
                 // db tx scope
                 let db_tx = db.begin_transaction()?;
-                let dec_blocks = decrypter.decrypt_blocks(&network, &blocks.0);
-                let batch_decrypt_elapsed: usize = dec_blocks.iter().map(|b| b.elapsed).sum();
-                log::info!("  Batch Decrypt: {} ms", batch_decrypt_elapsed);
+                let outputs = dec_blocks
+                    .iter()
+                    .map(|db| db.count_outputs as usize)
+                    .sum::<usize>();
+                {
+                    let mut dc = TRIAL_DECRYPTIONS.lock().unwrap();
+                    *dc += n_ivks * outputs;
+                }
                 for b in dec_blocks.iter() {
                     let mut my_nfs: Vec<Nf> = vec![];
                     for nf in b.spends.iter() {
@@ -227,7 +255,8 @@ pub async fn sync_async(
 
             let start = Instant::now();
             let mut nodes: Vec<Node> = vec![];
-            for cb in blocks.0.iter() {
+            for block in dec_blocks.iter() {
+                let cb = &block.compact_block;
                 for tx in cb.vtx.iter() {
                     for co in tx.outputs.iter() {
                         let mut cmu = [0u8; 32];
@@ -257,9 +286,7 @@ pub async fn sync_async(
                 });
                 let ids: Vec<_> = ids.into_iter().map(|e| e.id_tx).collect();
                 let mut client = connect_lightwalletd(&ld_url).await?;
-                retrieve_tx_info(coin_type, &mut client, &db_path2, &ids)
-                    .await
-                    .unwrap();
+                retrieve_tx_info(coin_type, &mut client, &db_path2, &ids).await?;
             }
             log::info!("Transaction Details : {}", start.elapsed().as_millis());
 
@@ -267,8 +294,9 @@ pub async fn sync_async(
             tree = new_tree;
             witnesses = new_witnesses;
 
-            if let Some(block) = blocks.0.last() {
+            if let Some(dec_block) = dec_blocks.last() {
                 {
+                    let block = &dec_block.compact_block;
                     let mut db_transaction = db.begin_transaction()?;
                     let height = block.height as u32;
                     for w in witnesses.iter() {
@@ -284,9 +312,9 @@ pub async fn sync_async(
                     db_transaction.commit()?;
                     // db_transaction is dropped here
                 }
-                log::info!("progress: {}", block.height);
+                log::info!("progress: {}", dec_block.height);
                 let callback = proc_callback.lock().await;
-                callback(block.height as u32);
+                callback(dec_block.height as u32);
             }
         }
 
@@ -298,11 +326,15 @@ pub async fn sync_async(
         Ok::<_, anyhow::Error>(())
     });
 
-    let res = tokio::try_join!(downloader, processor);
+    let res = tokio::try_join!(downloader, decryptor, processor);
     match res {
-        Ok((d, p)) => {
+        Ok((d, dc, p)) => {
             if let Err(err) = d {
                 log::info!("Downloader error = {}", err);
+                return Err(err);
+            }
+            if let Err(err) = dc {
+                log::info!("Decryptor error = {}", err);
                 return Err(err);
             }
             if let Err(err) = p {
@@ -328,4 +360,54 @@ pub async fn latest_height(ld_url: &str) -> anyhow::Result<u32> {
     let mut client = connect_lightwalletd(ld_url).await?;
     let height = get_latest_height(&mut client).await?;
     Ok(height)
+}
+
+#[allow(dead_code)]
+// test function
+pub fn trial_decrypt_one(
+    network: &Network,
+    height: u32,
+    fvk: &str,
+    cmu: &[u8],
+    epk: &[u8],
+    ciphertext: &[u8],
+) -> anyhow::Result<Option<Note>> {
+    let mut vks = HashMap::new();
+    let fvk =
+        decode_extended_full_viewing_key(network.hrp_sapling_extended_full_viewing_key(), &fvk)?
+            .ok_or(anyhow!("Invalid FVK"))?;
+    let ivk = fvk.fvk.vk.ivk();
+    vks.insert(
+        0,
+        AccountViewKey {
+            fvk,
+            ivk,
+            viewonly: false,
+        },
+    );
+    let dn = DecryptNode::new(vks);
+    let block = vec![CompactBlock {
+        proto_version: 0, // don't care about most of these fields
+        height: height as u64,
+        hash: vec![],
+        prev_hash: vec![],
+        time: 0,
+        header: vec![],
+        vtx: vec![CompactTx {
+            index: 0,
+            hash: vec![],
+            fee: 0,
+            spends: vec![],
+            actions: vec![],
+            outputs: vec![CompactSaplingOutput {
+                cmu: cmu.to_vec(),
+                epk: epk.to_vec(),
+                ciphertext: ciphertext.to_vec(),
+            }],
+        }],
+    }];
+    let decrypted_block = dn.decrypt_blocks(network, block);
+    let decrypted_block = decrypted_block.first().unwrap();
+    let note = decrypted_block.notes.first().map(|dn| dn.note.clone());
+    Ok(note)
 }

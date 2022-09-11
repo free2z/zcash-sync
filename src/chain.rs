@@ -1,18 +1,24 @@
-use crate::advance_tree;
 use crate::commitment::{CTree, Witness};
 use crate::db::AccountViewKey;
 use crate::lw_rpc::compact_tx_streamer_client::CompactTxStreamerClient;
 use crate::lw_rpc::*;
-use crate::scan::{Blocks, MAX_OUTPUTS_PER_CHUNK};
+use crate::scan::Blocks;
+use crate::{advance_tree, has_cuda};
 use ff::PrimeField;
 use futures::{future, FutureExt};
+use lazy_static::lazy_static;
 use log::info;
+use rand::prelude::SliceRandom;
+use rand::rngs::OsRng;
 use rayon::prelude::*;
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::Path;
+use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
+use sysinfo::{System, SystemExt};
 use thiserror::Error;
 use tokio::sync::mpsc::Sender;
 use tokio::time::timeout;
@@ -26,6 +32,17 @@ use zcash_primitives::sapling::note_encryption::SaplingDomain;
 use zcash_primitives::sapling::{Node, Note, PaymentAddress};
 use zcash_primitives::transaction::components::sapling::CompactOutputDescription;
 use zcash_primitives::zip32::ExtendedFullViewingKey;
+
+#[cfg(feature = "cuda")]
+use crate::gpu::cuda::{CudaProcessor, CUDA_CONTEXT};
+#[cfg(feature = "apple_metal")]
+use crate::gpu::metal::MetalProcessor;
+use crate::gpu::{trial_decrypt, USE_GPU};
+
+lazy_static! {
+    pub static ref DOWNLOADED_BYTES: Mutex<usize> = Mutex::new(0);
+    pub static ref TRIAL_DECRYPTIONS: Mutex<usize> = Mutex::new(0);
+}
 
 pub async fn get_latest_height(
     client: &mut CompactTxStreamerClient<Channel>,
@@ -95,15 +112,55 @@ pub enum ChainError {
     Busy,
 }
 
+fn get_mem_per_output() -> usize {
+    if cfg!(feature = "cuda") {
+        250
+    } else {
+        5
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn get_available_memory() -> anyhow::Result<usize> {
+    let cuda = CUDA_CONTEXT.lock().unwrap();
+    if let Some(cuda) = cuda.as_ref() {
+        cuda.total_memory()
+    } else {
+        get_system_available_memory()
+    }
+}
+
+#[cfg(not(feature = "cuda"))]
+fn get_available_memory() -> anyhow::Result<usize> {
+    get_system_available_memory()
+}
+
+fn get_system_available_memory() -> anyhow::Result<usize> {
+    let mut sys = System::new();
+    sys.refresh_memory();
+    let mem_available = sys.available_memory() as usize;
+    Ok(mem_available)
+}
+
+const MAX_OUTPUTS_PER_CHUNKS: usize = 200_000;
+
 /* download [start_height+1, end_height] inclusive */
+#[allow(unused_variables)]
 pub async fn download_chain(
     client: &mut CompactTxStreamerClient<Channel>,
+    n_ivks: usize,
     start_height: u32,
     end_height: u32,
     mut prev_hash: Option<[u8; 32]>,
+    max_cost: u32,
     blocks_tx: Sender<Blocks>,
-    cancel: &'static AtomicBool,
+    cancel: &'static Mutex<bool>,
 ) -> anyhow::Result<()> {
+    let outputs_per_chunk = get_available_memory()? / get_mem_per_output();
+    let outputs_per_chunk = outputs_per_chunk.min(MAX_OUTPUTS_PER_CHUNKS);
+    log::info!("Outputs per chunk = {}", outputs_per_chunk);
+    log::info!("max_cost = {}", max_cost);
+
     let mut output_count = 0;
     let mut cbs: Vec<CompactBlock> = Vec::new();
     let range = BlockRange {
@@ -115,13 +172,22 @@ pub async fn download_chain(
             height: end_height as u64,
             hash: vec![],
         }),
+        spam_filter_threshold: max_cost as u64,
     };
+    *DOWNLOADED_BYTES.lock().unwrap() = 0;
+    *TRIAL_DECRYPTIONS.lock().unwrap() = 0;
     let mut block_stream = client
         .get_block_range(Request::new(range))
         .await?
         .into_inner();
     while let Some(mut block) = block_stream.message().await? {
-        if cancel.load(Ordering::Acquire) {
+        let block_size = get_block_size(&block);
+        {
+            let mut downloaded = DOWNLOADED_BYTES.lock().unwrap();
+            *downloaded += block_size;
+        }
+        let c = *cancel.lock().unwrap();
+        if c {
             log::info!("Canceling download");
             break;
         }
@@ -136,12 +202,23 @@ pub async fn download_chain(
         let mut ph = [0u8; 32];
         ph.copy_from_slice(&block.hash);
         prev_hash = Some(ph);
-        for b in block.vtx.iter_mut() {
-            b.actions.clear(); // don't need Orchard actions
+        for tx in block.vtx.iter_mut() {
+            tx.actions.clear(); // don't need Orchard actions
+            let mut skipped = false;
+            if tx.outputs.len() > max_cost as usize {
+                for co in tx.outputs.iter_mut() {
+                    co.epk.clear();
+                    co.ciphertext.clear();
+                    skipped = true;
+                }
+            }
+            if skipped {
+                log::debug!("Output skipped {}", tx.outputs.len());
+            }
         }
 
         let block_output_count: usize = block.vtx.iter().map(|tx| tx.outputs.len()).sum();
-        if output_count + block_output_count > MAX_OUTPUTS_PER_CHUNK {
+        if output_count + block_output_count > outputs_per_chunk {
             // output
             let out = cbs;
             cbs = Vec::new();
@@ -154,6 +231,23 @@ pub async fn download_chain(
     }
     let _ = blocks_tx.send(Blocks(cbs)).await;
     Ok(())
+}
+
+fn get_block_size(block: &CompactBlock) -> usize {
+    block
+        .vtx
+        .iter()
+        .map(|tx| {
+            tx.spends.len() * 32
+                + tx.outputs.len() * (32 * 2 + 52)
+                + tx.actions.len() * (32 * 3 + 52)
+                + 8
+                + 32
+                + 4
+        })
+        .sum::<usize>()
+        + 16
+        + 32 * 2
 }
 
 pub struct DecryptNode {
@@ -169,12 +263,12 @@ pub struct NfRef {
     pub account: u32,
 }
 
-pub struct DecryptedBlock<'a> {
+pub struct DecryptedBlock {
     pub height: u32,
     pub notes: Vec<DecryptedNote>,
     pub count_outputs: u32,
     pub spends: Vec<Nf>,
-    pub compact_block: &'a CompactBlock,
+    pub compact_block: CompactBlock,
     pub elapsed: usize,
 }
 
@@ -194,14 +288,10 @@ pub struct DecryptedNote {
 }
 
 pub fn to_output_description(co: &CompactSaplingOutput) -> CompactOutputDescription {
-    let mut cmu = [0u8; 32];
-    cmu.copy_from_slice(&co.cmu);
+    let cmu: [u8; 32] = co.cmu.clone().try_into().unwrap();
     let cmu = bls12_381::Scalar::from_repr(cmu).unwrap();
-    let mut epk = [0u8; 32];
-    epk.copy_from_slice(&co.epk);
-    // let epk = jubjub::ExtendedPoint::from_bytes(&epk).unwrap();
-    let mut enc_ciphertext = [0u8; 52];
-    enc_ciphertext.copy_from_slice(&co.ciphertext);
+    let epk: [u8; 32] = co.epk.clone().try_into().unwrap();
+    let enc_ciphertext: [u8; 52] = co.ciphertext.clone().try_into().unwrap();
 
     CompactOutputDescription {
         ephemeral_key: EphemeralKeyBytes::from(epk),
@@ -257,11 +347,9 @@ impl<'a, N: Parameters> ShieldedOutput<SaplingDomain<N>, COMPACT_NOTE_SIZE>
     fn ephemeral_key(&self) -> EphemeralKeyBytes {
         self.epk.clone()
     }
-
     fn cmstar_bytes(&self) -> <SaplingDomain<N> as Domain>::ExtractedCommitmentBytes {
         self.cmu
     }
-
     fn enc_ciphertext(&self) -> &[u8; COMPACT_NOTE_SIZE] {
         &self.ciphertext
     }
@@ -269,9 +357,9 @@ impl<'a, N: Parameters> ShieldedOutput<SaplingDomain<N>, COMPACT_NOTE_SIZE>
 
 fn decrypt_notes<'a, N: Parameters>(
     network: &N,
-    block: &'a CompactBlock,
+    block: CompactBlock,
     vks: &[(&u32, &AccountViewKey)],
-) -> DecryptedBlock<'a> {
+) -> DecryptedBlock {
     let height = BlockHeight::from_u32(block.height as u32);
     let mut count_outputs = 0u32;
     let mut spends: Vec<Nf> = vec![];
@@ -285,39 +373,27 @@ fn decrypt_notes<'a, N: Parameters>(
             spends.push(Nf(nf));
         }
 
-        for (output_index, co) in vtx.outputs.iter().enumerate() {
-            let domain = SaplingDomain::<N>::for_height(network.clone(), height);
-            let output =
-                AccountOutput::<N>::new(tx_index, output_index, count_outputs as usize, vtx, co);
-            outputs.push((domain, output));
+        if let Some(fco) = vtx.outputs.first() {
+            if !fco.epk.is_empty() {
+                for (output_index, co) in vtx.outputs.iter().enumerate() {
+                    let domain = SaplingDomain::<N>::for_height(network.clone(), height);
+                    let output = AccountOutput::<N>::new(
+                        tx_index,
+                        output_index,
+                        count_outputs as usize,
+                        vtx,
+                        co,
+                    );
+                    outputs.push((domain, output));
 
-            // let od = to_output_description(co);
-            //
-            // for (&account, vk) in vks.iter() {
-            //     if let Some((note, pa)) =
-            //         try_sapling_compact_note_decryption(network, height, &vk.ivk, &od)
-            //     {
-            //         notes.push(DecryptedNote {
-            //             account,
-            //             ivk: vk.fvk.clone(),
-            //             note,
-            //             pa,
-            //             viewonly: vk.viewonly,
-            //             position_in_block: count_outputs as usize,
-            //             height: block.height as u32,
-            //             tx_index,
-            //             txid: vtx.hash.clone(),
-            //             output_index,
-            //         });
-            //     }
-            // }
-
-            count_outputs += 1;
+                    count_outputs += 1;
+                }
+            } else {
+                // we filter by transaction, therefore if one epk is empty, every epk is empty
+                // log::info!("Spam Filter tx {}", hex::encode(&vtx.hash));
+                count_outputs += vtx.outputs.len() as u32;
+            }
         }
-    }
-
-    if outputs.len() >= MAX_OUTPUTS_PER_CHUNK {
-        log::warn!("outputs overflow {}", outputs.len());
     }
 
     let start = Instant::now();
@@ -359,18 +435,67 @@ impl DecryptNode {
         DecryptNode { vks }
     }
 
-    pub fn decrypt_blocks<'a>(
+    pub fn decrypt_blocks(
         &self,
         network: &Network,
-        blocks: &'a [CompactBlock],
-    ) -> Vec<DecryptedBlock<'a>> {
+        blocks: Vec<CompactBlock>,
+    ) -> Vec<DecryptedBlock> {
+        let use_gpu = { *USE_GPU.lock().unwrap() };
+        if use_gpu {
+            #[cfg(feature = "cuda")]
+            return self.cuda_decrypt_blocks(network, blocks);
+
+            #[cfg(feature = "apple_metal")]
+            return self.metal_decrypt_blocks(network, blocks);
+
+            #[allow(unreachable_code)]
+            self.decrypt_blocks_soft(network, blocks)
+        } else {
+            self.decrypt_blocks_soft(network, blocks)
+        }
+    }
+
+    pub fn decrypt_blocks_soft(
+        &self,
+        network: &Network,
+        blocks: Vec<CompactBlock>,
+    ) -> Vec<DecryptedBlock> {
         let vks: Vec<_> = self.vks.iter().collect();
         let mut decrypted_blocks: Vec<DecryptedBlock> = blocks
-            .par_iter()
+            .into_par_iter()
             .map(|b| decrypt_notes(network, b, &vks))
             .collect();
         decrypted_blocks.sort_by(|a, b| a.height.cmp(&b.height));
         decrypted_blocks
+    }
+
+    #[cfg(feature = "cuda")]
+    pub fn cuda_decrypt_blocks(
+        &self,
+        network: &Network,
+        blocks: Vec<CompactBlock>,
+    ) -> Vec<DecryptedBlock> {
+        if blocks.is_empty() {
+            return vec![];
+        }
+        if has_cuda() {
+            let processor = CudaProcessor::setup_decrypt(network, blocks).unwrap();
+            return trial_decrypt(processor, self.vks.iter()).unwrap();
+        }
+        self.decrypt_blocks_soft(network, blocks)
+    }
+
+    #[cfg(feature = "apple_metal")]
+    pub fn metal_decrypt_blocks(
+        &self,
+        network: &Network,
+        blocks: Vec<CompactBlock>,
+    ) -> Vec<DecryptedBlock> {
+        if blocks.is_empty() {
+            return vec![];
+        }
+        let processor = MetalProcessor::setup_decrypt(network, blocks).unwrap();
+        trial_decrypt(processor, self.vks.iter()).unwrap()
     }
 }
 
@@ -425,9 +550,6 @@ fn calculate_tree_state_v1(
             }
         }
     }
-    // let mut bb: Vec<u8> = vec![];
-    // tree_state.write(&mut bb).unwrap();
-    // hex::encode(bb)
 
     witnesses
 }
@@ -480,6 +602,7 @@ pub fn calculate_tree_state_v2(cbs: &[CompactBlock], blocks: &[DecryptedBlock]) 
 }
 
 pub async fn connect_lightwalletd(url: &str) -> anyhow::Result<CompactTxStreamerClient<Channel>> {
+    log::info!("LWD URL: {}", url);
     let mut channel = tonic::transport::Channel::from_shared(url.to_owned())?;
     if url.starts_with("https") {
         let pem = include_bytes!("ca.pem");
@@ -505,128 +628,12 @@ pub async fn get_best_server(servers: &[String]) -> Option<String> {
             tokio::spawn(timeout(Duration::from_secs(1), get_height(s.to_string()))).boxed();
         server_heights.push(server_height);
     }
-    let server_heights = future::try_join_all(server_heights).await.ok()?;
+    let mut server_heights = future::try_join_all(server_heights).await.ok()?;
+    server_heights.shuffle(&mut OsRng);
 
     server_heights
         .into_iter()
         .filter_map(|h| h.unwrap_or(None))
         .max_by_key(|(_, h)| *h)
         .map(|x| x.0)
-}
-
-// pub async fn sync(
-//     network: &Network,
-//     vks: HashMap<u32, AccountViewKey>,
-//     ld_url: &str,
-// ) -> anyhow::Result<()> {
-//     let decrypter = DecryptNode::new(vks);
-//     let mut client = connect_lightwalletd(ld_url).await?;
-//     let start_height: u32 = network
-//         .activation_height(NetworkUpgrade::Sapling)
-//         .unwrap()
-//         .into();
-//     let end_height = get_latest_height(&mut client).await?;
-//
-//     let start = Instant::now();
-//     let cbs = download_chain(&mut client, start_height, end_height, None).await?;
-//     eprintln!("Download chain: {} ms", start.elapsed().as_millis());
-//
-//     let start = Instant::now();
-//     let blocks = decrypter.decrypt_blocks(network, &cbs);
-//     eprintln!("Decrypt Notes: {} ms", start.elapsed().as_millis());
-//     let batch_decrypt_elapsed: usize = blocks.iter().map(|b| b.elapsed).sum();
-//     eprintln!("  Batch Decrypt: {} ms", batch_decrypt_elapsed);
-//
-//     let start = Instant::now();
-//     let witnesses = calculate_tree_state_v2(&cbs, &blocks);
-//     eprintln!("Tree State & Witnesses: {} ms", start.elapsed().as_millis());
-//
-//     eprintln!("# Witnesses {}", witnesses.len());
-//     for w in witnesses.iter() {
-//         let mut bb: Vec<u8> = vec![];
-//         w.write(&mut bb).unwrap();
-//         log::info!("{}", hex::encode(&bb));
-//     }
-//
-//     Ok(())
-// }
-
-#[cfg(test)]
-mod tests {
-    #[allow(unused_imports)]
-    use crate::chain::{
-        calculate_tree_state_v1, calculate_tree_state_v2, download_chain, get_latest_height,
-        get_tree_state, DecryptNode,
-    };
-    use crate::db::AccountViewKey;
-    use crate::lw_rpc::compact_tx_streamer_client::CompactTxStreamerClient;
-    use crate::LWD_URL;
-
-    use std::collections::HashMap;
-    use std::time::Instant;
-    use zcash_client_backend::encoding::decode_extended_full_viewing_key;
-    use zcash_primitives::consensus::{Network, NetworkUpgrade, Parameters};
-
-    const NETWORK: &Network = &Network::MainNetwork;
-
-    #[tokio::test]
-    async fn test_get_latest_height() -> anyhow::Result<()> {
-        let mut client = CompactTxStreamerClient::connect(LWD_URL).await?;
-        let height = get_latest_height(&mut client).await?;
-        assert!(height > 1288000);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_download_chain() -> anyhow::Result<()> {
-        dotenv::dotenv().unwrap();
-        let fvk = dotenv::var("FVK").unwrap();
-
-        let mut fvks: HashMap<u32, AccountViewKey> = HashMap::new();
-        let fvk =
-            decode_extended_full_viewing_key(NETWORK.hrp_sapling_extended_full_viewing_key(), &fvk)
-                .unwrap()
-                .unwrap();
-        fvks.insert(1, AccountViewKey::from_fvk(&fvk));
-        let decrypter = DecryptNode::new(fvks);
-        let mut client = CompactTxStreamerClient::connect(LWD_URL).await?;
-        let start_height: u32 = NETWORK
-            .activation_height(NetworkUpgrade::Sapling)
-            .unwrap()
-            .into();
-        let end_height = get_latest_height(&mut client).await?;
-
-        let start = Instant::now();
-        let cbs = download_chain(&mut client, start_height, end_height, None).await?;
-        eprintln!("Download chain: {} ms", start.elapsed().as_millis());
-
-        let start = Instant::now();
-        let blocks = decrypter.decrypt_blocks(&Network::MainNetwork, &cbs);
-        eprintln!("Decrypt Notes: {} ms", start.elapsed().as_millis());
-
-        // no need to calculate tree before the first note if we can
-        // get it from the server
-        // disabled because I want to see the performance of a complete scan
-
-        // let first_block = blocks.iter().find(|b| !b.notes.is_empty()).unwrap();
-        // let height = first_block.height - 1;
-        // let tree_state = get_tree_state(&mut client, height).await;
-        // let tree_state = hex::decode(tree_state).unwrap();
-        // let tree_state = CommitmentTree::<Node>::read(&*tree_state).unwrap();
-
-        // let witnesses = calculate_tree_state(&cbs, &blocks, 0, tree_state);
-
-        let start = Instant::now();
-        let witnesses = calculate_tree_state_v2(&cbs, &blocks);
-        eprintln!("Tree State & Witnesses: {} ms", start.elapsed().as_millis());
-
-        eprintln!("# Witnesses {}", witnesses.len());
-        for w in witnesses.iter() {
-            let mut bb: Vec<u8> = vec![];
-            w.write(&mut bb).unwrap();
-            log::info!("{}", hex::encode(&bb));
-        }
-
-        Ok(())
-    }
 }

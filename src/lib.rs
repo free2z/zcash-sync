@@ -71,9 +71,9 @@ pub use crate::coinconfig::{
     init_coin, set_active, set_active_account, set_coin_lwd_url, CoinConfig,
 };
 pub use crate::commitment::{CTree, Witness};
-pub use crate::db::{AccountRec, DbAdapter, TxRec};
+pub use crate::db::{AccountData, AccountInfo, AccountRec, DbAdapter, TxRec};
 pub use crate::fountain::{put_drop, FountainCodes, RaptorQDrops};
-pub use crate::hash::pedersen_hash;
+pub use crate::hash::{pedersen_hash, Hash, GENERATORS_EXP};
 pub use crate::key::{generate_random_enc_key, KeyHelpers};
 pub use crate::lw_rpc::compact_tx_streamer_client::CompactTxStreamerClient;
 pub use crate::lw_rpc::*;
@@ -83,6 +83,7 @@ pub use crate::pay::{broadcast_tx, get_tx_summary, Tx, TxIn, TxOut};
 pub use crate::print::*;
 pub use crate::scan::{latest_height, sync_async};
 pub use crate::ua::{get_sapling, get_ua};
+pub use chain::DOWNLOADED_BYTES;
 pub use zip32::{derive_zip32, KeyPack};
 // pub use crate::wallet::{decrypt_backup, encrypt_backup, RecipientMemo, Wallet, WalletBalance};
 
@@ -94,3 +95,7 @@ pub use crate::ledger::sweep_ledger;
 
 #[cfg(feature = "nodejs")]
 pub mod nodejs;
+
+mod gpu;
+
+pub use gpu::{has_cuda, has_gpu, has_metal, use_gpu};

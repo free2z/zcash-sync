@@ -13,7 +13,7 @@ typedef void *DartPostCObjectFnType;
 
 #define QR_DATA_SIZE 256
 
-#define MAX_OUTPUTS_PER_CHUNK 200000
+#define N 200000
 
 void dummy_export(void);
 
@@ -47,7 +47,7 @@ void import_transparent_secret_key(uint8_t coin, uint32_t id_account, char *secr
 
 void cancel_warp(void);
 
-uint8_t warp(uint8_t coin, bool get_tx, uint32_t anchor_offset, int64_t port);
+uint8_t warp(uint8_t coin, bool get_tx, uint32_t anchor_offset, uint32_t max_cost, int64_t port);
 
 int8_t is_valid_key(uint8_t coin, char *key);
 
@@ -64,7 +64,9 @@ char *send_multi_payment(char *recipients_json,
 
 void skip_to_last_height(uint8_t coin);
 
-void rewind_to_height(uint32_t height);
+uint32_t rewind_to(uint32_t height);
+
+void rescan_from(uint32_t height);
 
 int64_t mempool_sync(void);
 
@@ -100,6 +102,8 @@ void mark_all_messages_read(bool read);
 
 void truncate_data(void);
 
+void truncate_sync_data(void);
+
 void delete_account(uint8_t coin, uint32_t account);
 
 char *make_payment_uri(char *address, uint64_t amount, char *memo);
@@ -128,3 +132,19 @@ char *derive_zip32(uint8_t coin,
                    uint32_t external,
                    bool has_address,
                    uint32_t address);
+
+uintptr_t get_downloaded_size(void);
+
+uintptr_t get_trial_decryptions_count(void);
+
+void disable_wal(char *db_path);
+
+bool has_cuda(void);
+
+bool has_metal(void);
+
+bool has_gpu(void);
+
+void use_gpu(bool v);
+
+void import_sync_file(uint8_t coin, char *path);

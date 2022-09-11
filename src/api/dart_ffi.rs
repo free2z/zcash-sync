@@ -1,5 +1,6 @@
+use crate::chain::TRIAL_DECRYPTIONS;
 use crate::coinconfig::{init_coin, CoinConfig};
-use crate::{ChainError, Tx};
+use crate::{ChainError, Tx, DOWNLOADED_BYTES};
 use allo_isolate::{ffi, IntoDart};
 use android_logger::Config;
 use lazy_static::lazy_static;
@@ -14,6 +15,8 @@ use zcash_primitives::transaction::builder::Progress;
 
 static mut POST_COBJ: Option<ffi::DartPostCObjectFnType> = None;
 static IS_ERROR: AtomicBool = AtomicBool::new(false);
+
+const MAX_COINS: u8 = 3;
 
 lazy_static! {
     static ref LAST_ERROR: Mutex<RefCell<String>> = Mutex::new(RefCell::new(String::new()));
@@ -56,12 +59,13 @@ fn try_init_logger() {
             // })
             .with_min_level(Level::Info),
     );
+    let _ = env_logger::try_init();
 }
 
 fn log_result<T: Default>(result: anyhow::Result<T>) -> T {
     match result {
         Err(err) => {
-            log::error!("{}", err);
+            log::error!("ERROR: {}", err);
             let last_error = LAST_ERROR.lock().unwrap();
             last_error.replace(err.to_string());
             IS_ERROR.store(true, Ordering::Release);
@@ -108,6 +112,7 @@ pub unsafe extern "C" fn init_wallet(db_path: *mut c_char) {
     from_c_str!(db_path);
     let _ = init_coin(0, &format!("{}/zec.db", &db_path));
     let _ = init_coin(1, &format!("{}/yec.db", &db_path));
+    let _ = init_coin(2, &format!("{}/arrr.db", &db_path));
 }
 
 #[no_mangle]
@@ -189,18 +194,24 @@ pub unsafe extern "C" fn import_transparent_secret_key(
 
 lazy_static! {
     static ref SYNC_LOCK: Semaphore = Semaphore::new(1);
-    static ref SYNC_CANCELED: AtomicBool = AtomicBool::new(false);
+    static ref SYNC_CANCELED: Mutex<bool> = Mutex::new(false);
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn cancel_warp() {
     log::info!("Sync canceled");
-    SYNC_CANCELED.store(true, Ordering::Release);
+    *SYNC_CANCELED.lock().unwrap() = true;
 }
 
 #[tokio::main]
 #[no_mangle]
-pub async unsafe extern "C" fn warp(coin: u8, get_tx: bool, anchor_offset: u32, port: i64) -> u8 {
+pub async unsafe extern "C" fn warp(
+    coin: u8,
+    get_tx: bool,
+    anchor_offset: u32,
+    max_cost: u32,
+    port: i64,
+) -> u8 {
     let res = async {
         let _permit = SYNC_LOCK.acquire().await?;
         log::info!("Sync started");
@@ -208,6 +219,7 @@ pub async unsafe extern "C" fn warp(coin: u8, get_tx: bool, anchor_offset: u32, 
             coin,
             get_tx,
             anchor_offset,
+            max_cost,
             move |height| {
                 let mut height = height.into_dart();
                 if port != 0 {
@@ -239,7 +251,7 @@ pub async unsafe extern "C" fn warp(coin: u8, get_tx: bool, anchor_offset: u32, 
         }
     };
     let r = res.await;
-    SYNC_CANCELED.store(false, Ordering::Release);
+    *SYNC_CANCELED.lock().unwrap() = false;
     log_result(r)
 }
 
@@ -319,8 +331,15 @@ pub async unsafe extern "C" fn skip_to_last_height(coin: u8) {
 
 #[tokio::main]
 #[no_mangle]
-pub async unsafe extern "C" fn rewind_to_height(height: u32) {
-    let res = crate::api::sync::rewind_to_height(height).await;
+pub async unsafe extern "C" fn rewind_to(height: u32) -> u32 {
+    let res = crate::api::sync::rewind_to(height).await;
+    log_result(res)
+}
+
+#[tokio::main]
+#[no_mangle]
+pub async unsafe extern "C" fn rescan_from(height: u32) {
+    let res = crate::api::sync::rescan_from(height).await;
     log_result(res)
 }
 
@@ -489,6 +508,12 @@ pub unsafe extern "C" fn truncate_data() {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn truncate_sync_data() {
+    let res = crate::api::account::truncate_sync_data();
+    log_result(res)
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn delete_account(coin: u8, account: u32) {
     let res = crate::api::account::delete_account(coin, account);
     log_result(res)
@@ -519,7 +544,7 @@ pub unsafe extern "C" fn parse_payment_uri(uri: *mut c_char) -> *mut c_char {
 
 #[no_mangle]
 pub unsafe extern "C" fn generate_random_enc_key() -> *mut c_char {
-    to_c_str(log_string(crate::key2::generate_random_enc_key()))
+    to_c_str(log_string(crate::key::generate_random_enc_key()))
 }
 
 #[no_mangle]
@@ -527,7 +552,7 @@ pub unsafe extern "C" fn get_full_backup(key: *mut c_char) -> *mut c_char {
     from_c_str!(key);
     let res = || {
         let mut accounts = vec![];
-        for coin in [0, 1] {
+        for coin in 0..MAX_COINS {
             accounts.extend(crate::api::fullbackup::get_full_backup(coin)?);
         }
 
@@ -543,7 +568,7 @@ pub unsafe extern "C" fn restore_full_backup(key: *mut c_char, backup: *mut c_ch
     from_c_str!(backup);
     let res = || {
         let accounts = crate::api::fullbackup::decrypt_backup(&key, &backup)?;
-        for coin in [0, 1] {
+        for coin in 0..MAX_COINS {
             crate::api::fullbackup::restore_full_backup(coin, &accounts)?;
         }
         Ok(())
@@ -634,4 +659,49 @@ pub unsafe extern "C" fn derive_zip32(
         Ok(result)
     };
     to_c_str(log_string(res()))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn get_downloaded_size() -> usize {
+    *DOWNLOADED_BYTES.lock().unwrap()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn get_trial_decryptions_count() -> usize {
+    *TRIAL_DECRYPTIONS.lock().unwrap()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn disable_wal(db_path: *mut c_char) {
+    from_c_str!(db_path);
+    let res = crate::db::DbAdapter::disable_wal(&db_path);
+    log_result(res)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn has_cuda() -> bool {
+    crate::has_cuda()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn has_metal() -> bool {
+    crate::has_metal()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn has_gpu() -> bool {
+    crate::has_gpu()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn use_gpu(v: bool) {
+    crate::use_gpu(v)
+}
+
+#[tokio::main]
+#[no_mangle]
+pub async unsafe extern "C" fn import_sync_file(coin: u8, path: *mut c_char) {
+    from_c_str!(path);
+    let res = crate::api::account::import_sync_data(coin, &path).await;
+    log_result(res)
 }

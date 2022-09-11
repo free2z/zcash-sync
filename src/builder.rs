@@ -1,4 +1,6 @@
 use crate::commitment::{CTree, Witness};
+#[cfg(feature = "cuda")]
+use crate::gpu::cuda::CUDA_CONTEXT;
 use crate::hash::{pedersen_hash, pedersen_hash_inner};
 use ff::PrimeField;
 use group::Curve;
@@ -165,7 +167,12 @@ impl CTreeBuilder {
     }
 }
 
-fn combine_level(commitments: &mut [Node], offset: Option<Node>, n: usize, depth: usize) -> usize {
+fn combine_level_soft(
+    commitments: &mut [Node],
+    offset: Option<Node>,
+    n: usize,
+    depth: usize,
+) -> usize {
     assert_eq!(n % 2, 0);
 
     let nn = n / 2;
@@ -201,6 +208,42 @@ fn combine_level(commitments: &mut [Node], offset: Option<Node>, n: usize, depth
 
     commitments[0..nn].copy_from_slice(&next_level);
     nn
+}
+
+#[cfg(feature = "cuda")]
+fn combine_level_cuda(
+    commitments: &mut [Node],
+    offset: Option<Node>,
+    n: usize,
+    depth: usize,
+) -> usize {
+    assert_eq!(n % 2, 0);
+    if n == 0 {
+        return 0;
+    }
+
+    let mut hasher = CUDA_CONTEXT.lock().unwrap();
+    if let Some(hasher) = hasher.as_mut() {
+        let nn = n / 2;
+        let hashes: Vec<_> = (0..n)
+            .map(|i| CTreeBuilder::get(commitments, i, &offset).repr)
+            .collect();
+        let new_hashes = hasher.batch_hash(depth as u8, &hashes).unwrap();
+        for i in 0..nn {
+            commitments[i] = Node::new(new_hashes[i]);
+        }
+        nn
+    } else {
+        combine_level_soft(commitments, offset, n, depth)
+    }
+}
+
+fn combine_level(commitments: &mut [Node], offset: Option<Node>, n: usize, depth: usize) -> usize {
+    #[cfg(feature = "cuda")]
+    return combine_level_cuda(commitments, offset, n, depth);
+
+    #[allow(unreachable_code)]
+    combine_level_soft(commitments, offset, n, depth)
 }
 
 struct WitnessBuilder {

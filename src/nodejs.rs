@@ -1,10 +1,11 @@
 // #![allow(non_snake_case)]
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::convert::TryInto;
+
 use node_bindgen::derive::node_bindgen;
 use node_bindgen::core::NjError;
 use node_bindgen::init::node_bindgen_init_once;
-
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::convert::TryInto;
 
 use lazy_static::lazy_static;
 // use log::{info, warn};
@@ -145,16 +146,18 @@ async fn get_sync_height() -> i32 {
 }
 
 
-#[tokio::main]
-#[node_bindgen]
-async fn rewind_to_height(height: u32) {
-    let res = crate::api::sync::rewind_to_height(height).await;
-    log_result(res)
-}
+// #[tokio::main]
+// #[node_bindgen]
+// async fn rewind_to_height(height: u32) {
+//     let res = crate::wallet::rewind_to_height(height).await;
+//     log_result(res)
+// }
 
 
 lazy_static! {
-    static ref SYNC_CANCELED: AtomicBool = AtomicBool::new(false);
+    // static ref SYNC_CANCELED: AtomicBool = AtomicBool::new(false);
+    static ref SYNC_CANCELED: Mutex<bool> = Mutex::new(false);
+
     // static ref WARP_OFFSET: AtomicU32 = AtomicU32::new(0);
 }
 
@@ -203,8 +206,8 @@ lazy_static! {
 #[node_bindgen]
 async fn warp() {
     crate::api::sync::coin_sync(
-        // zec, use transparent, 0 offset
-        0, true, 0,
+        // zec, use transparent, 0 offset, filter > 20 max_cost
+        0, true, 0, 20,
         move |_height| {
         //
         },
@@ -224,8 +227,8 @@ async fn warp_handle() -> u8 {
     // YOU MUST initCoin first!!!
     let res = async {
         let result = crate::api::sync::coin_sync(
-            // zec, use transparent, 0 offset
-            0, true, 0,
+            // zec, use transparent, 0 offset, filter max_cost>20
+            0, true, 0, 20,
             move |_height| {
             //
             },
@@ -253,7 +256,7 @@ async fn warp_handle() -> u8 {
         }
     };
     let r = res.await;
-    SYNC_CANCELED.store(false, Ordering::Release);
+    // *SYNC_CANCELED.store(false, Ordering::Release);
     log_result(r)
 }
 
@@ -280,7 +283,7 @@ async fn warp_handle() -> u8 {
 #[node_bindgen]
 async fn prometo(offset: u32) -> Result<(), NjError> {
     crate::api::sync::coin_sync(
-        0, true, offset, move |_height| {}, &SYNC_CANCELED
+        0, true, offset, 20, move |_height| {}, &SYNC_CANCELED
     ).await.map_err(|e| NjError::Other(format!("{}", e)))
 }
 

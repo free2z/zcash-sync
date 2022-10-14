@@ -1,10 +1,8 @@
 [package]
-name = "sync"
-version = "0.1.0"
+name = "zcash-warpsync"
+version = "1.2.15"
 authors = ["Hanh <hanh425@gmail.com>"]
-edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+edition = "2021"
 
 [[bench]]
 name = "scan_all"
@@ -14,6 +12,11 @@ harness = false
 name = "warp-rpc"
 path = "src/main/rpc.rs"
 required-features = ["rpc"]
+
+[[bin]]
+name = "wallet"
+path = "src/main/wallet.rs"
+required-features = ["dotenv"]
 
 #[[bin]]
 #name = "ledger"

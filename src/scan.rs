@@ -335,8 +335,6 @@ pub async fn sync_async(
         let callback = progress_callback.lock().await;
         callback(progress);
 
-        db.purge_old_witnesses(end_height - 100)?;
-
         Ok::<_, anyhow::Error>(())
     });
 
@@ -363,6 +361,12 @@ pub async fn sync_async(
             }
             anyhow::bail!("Join Error");
         }
+    }
+
+    let mut db = DbAdapter::new(coin_type, &db_path)?;
+    let synced_height = db.get_last_sync_height()?;
+    if let Some(synced_height) = synced_height {
+        db.purge_old_witnesses(synced_height - 100)?;
     }
 
     log::info!("Sync completed");

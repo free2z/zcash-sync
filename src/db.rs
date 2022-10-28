@@ -575,7 +575,7 @@ impl DbAdapter {
     }
 
     pub fn purge_old_witnesses(&mut self, height: u32) -> anyhow::Result<()> {
-        log::debug!("+purge_old_witnesses");
+        log::info!("purge_old_witnesses - {}", height);
         let min_height: Option<u32> = self.connection.query_row(
             "SELECT MAX(height) FROM blocks WHERE height <= ?1",
             params![height],

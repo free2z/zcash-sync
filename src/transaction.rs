@@ -77,10 +77,12 @@ pub async fn decode_transaction(
 
     let tx = tx.into_data();
     // log::info!("{:?}", tx);
+    let mut contact_memo_auth = false;
     let sapling_bundle = tx.sapling_bundle().ok_or(anyhow!("No sapling bundle"))?;
     for spend in sapling_bundle.shielded_spends.iter() {
         let nf = spend.nullifier.to_vec();
         if let Some(&v) = nfs.get(&(account, nf)) {
+            contact_memo_auth = true;
             amount -= v as i64;
         }
     }
@@ -104,7 +106,10 @@ pub async fn decode_transaction(
     for output in sapling_bundle.shielded_outputs.iter() {
         if let Some((note, pa, memo)) = try_sapling_note_decryption(network, height, &ivk, output) {
             amount += note.value as i64; // change or self transfer
-            let _ = contact_decoder.add_memo(&memo); // ignore memo that is not for contacts
+            if contact_memo_auth {
+                // memo must come from a tx that spends from the same account
+                let _ = contact_decoder.add_memo(&memo); // ignore memo that is not for contacts
+            }
             let memo = Memo::try_from(memo)?;
             if zaddress.is_empty() {
                 zaddress = encode_payment_address(network.hrp_sapling_payment_address(), &pa);

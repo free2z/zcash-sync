@@ -1,27 +1,19 @@
 // #![allow(non_snake_case)]
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::convert::TryInto;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Mutex;
 
-use node_bindgen::derive::node_bindgen;
 use node_bindgen::core::NjError;
+use node_bindgen::derive::node_bindgen;
 use node_bindgen::init::node_bindgen_init_once;
 
 use lazy_static::lazy_static;
-// use log::{info, warn};
 
-// use rocket::serde::{json::Json, Deserialize, Serialize};
-// use warp_api_ffi::{get_best_server, AccountRec, CoinConfig, RaptorQDrops, Tx, TxRec};
-// use thiserror::Error;
-// use anyhow::Error;
-
-// use crate::wallet::RecipientMemo;
 use crate::api::payment::RecipientMemo;
-// use crate::{ChainError, Tx};
-use crate::{ChainError};
+use crate::scan;
+use crate::ChainError;
 
-use log::{info, warn, error};
-
+use log::{error, info, warn};
 
 #[node_bindgen_init_once]
 fn init_logging() {
@@ -41,8 +33,6 @@ fn init_logging() {
 //     info!("logging initialized");
 // }
 
-
-
 fn log_result<T: Default>(result: anyhow::Result<T>) -> T {
     match result {
         Err(err) => {
@@ -59,29 +49,20 @@ fn log_result<T: Default>(result: anyhow::Result<T>) -> T {
     }
 }
 
-
-
 fn log_string(result: anyhow::Result<String>) -> String {
     match result {
         Err(err) => {
             log::error!("{}!!!", err);
-            // let last_error = LAST_ERROR.lock().unwrap();
-            // last_error.replace(err.to_string());
-            // IS_ERROR.store(true, Ordering::Release);
+
             format!("{}", err)
         }
-        Ok(v) => {
-            // IS_ERROR.store(false, Ordering::Release);
-            v
-        }
+        Ok(v) => v,
     }
 }
-
 
 #[node_bindgen]
 fn init_coin(coin: u32, db_path: String, lwd_url: String) {
     warn!("calling init_coin");
-
     let coin = coin as u8;
     // info!("Init coin");
     crate::init_coin(coin, &db_path).unwrap();
@@ -100,25 +81,6 @@ fn set_active_account(coin: u32, id: u32) {
     crate::coinconfig::set_active_account(coin as u8, id);
 }
 
-// //
-// #[node_bindgen]
-// fn list_accounts() -> Result<Json<Vec<AccountRec>>, Error> {
-//     let c = CoinConfig::get_active();
-//     let db = c.db()?;
-//     let accounts = db.get_accounts()?;
-//     Ok(Json(accounts))
-// }
-
-
-// #[node_bindgen]
-// fn list_accounts() {
-//     let cc = CoinConfig::get_active();
-//     // let cc = crate::coinconfig::get_active();
-//     let db = cc.db();
-//     // let accounts = db.get_accounts();
-//     // accounts
-// }
-
 #[tokio::main]
 #[node_bindgen]
 async fn get_server_height() -> i32 {
@@ -135,7 +97,6 @@ pub async fn skip_to_last_height() {
     log_result(res)
 }
 
-
 #[tokio::main]
 #[node_bindgen]
 async fn get_sync_height() -> i32 {
@@ -145,20 +106,8 @@ async fn get_sync_height() -> i32 {
     log_result(height).try_into().unwrap()
 }
 
-
-// #[tokio::main]
-// #[node_bindgen]
-// async fn rewind_to_height(height: u32) {
-//     let res = crate::wallet::rewind_to_height(height).await;
-//     log_result(res)
-// }
-
-
 lazy_static! {
-    // static ref SYNC_CANCELED: AtomicBool = AtomicBool::new(false);
     static ref SYNC_CANCELED: Mutex<bool> = Mutex::new(false);
-
-    // static ref WARP_OFFSET: AtomicU32 = AtomicU32::new(0);
 }
 
 // TODO
@@ -182,83 +131,75 @@ lazy_static! {
 // # Entering the V8 API without proper locking in place
 // #
 //
-// #[tokio::main]
-// #[node_bindgen]
-// async fn warpcb<F: Fn(u32)>(cb: F) {
-//     // let F = F as Fn(u32) + std::marker::Send + 'static;
-//     let cb = cb as (dyn Fn(u32) + std::marker::Send + 'static);
-//     crate::api::sync::coin_sync(
-//         0, true, 0,
-//         cb,
-//         &SYNC_CANCELED)
-//         .await
-//         .unwrap();
-// }
-
-// #[node_bindgen]
-// fn get_sync_height() -> u32 {
-//     // *WARP_OFFSET.get_mut()
-//     // *WARP_OFFSET as u32
-//     WARP_OFFSET.load(Ordering::Relaxed)
-// }
 
 #[tokio::main]
 #[node_bindgen]
 async fn warp() {
     crate::api::sync::coin_sync(
         // zec, use transparent, 0 offset, filter > 20 max_cost
-        0, true, 0, 20,
+        0,
+        true,
+        0,
+        20,
         move |_height| {
-        //
-        },
-        &SYNC_CANCELED
-    ).await.unwrap();
-}
-
-
-// Does not support tokio async executor atm
-#[tokio::main]
-#[node_bindgen]
-async fn warp_handle() -> u8 {
-    error!("Calling warp!");
-    warn!("warn");
-    info!("yo info");
-
-    // YOU MUST initCoin first!!!
-    let res = async {
-        let result = crate::api::sync::coin_sync(
-            // zec, use transparent, 0 offset, filter max_cost>20
-            0, true, 0, 20,
-            move |_height| {
             //
-            },
-            &SYNC_CANCELED
-        ).await;
-
-        // what's this about?
-        // need an active account to run this one?
-        // crate::api::mempool::scan().await?;
-
-        match result {
-            Ok(_) => Ok(0),
-            Err(err) => {
-                if let Some(e) = err.downcast_ref::<ChainError>() {
-                    match e {
-                        ChainError::Reorg => Ok(1),
-                        ChainError::Busy => Ok(2),
-                    }
-                } else {
-                    log::error!("Non-chain error: {}", err);
-                    // 11111111
-                    Ok(0xFF)
-                }
-            }
-        }
-    };
-    let r = res.await;
-    // *SYNC_CANCELED.store(false, Ordering::Release);
-    log_result(r)
+        },
+        move |progress: scan::Progress| {
+            // Use SYNC_CANCELED here
+        },
+        &SYNC_CANCELED,
+    )
+    .await
+    .unwrap();
 }
+
+// // Does not support tokio async executor atm
+// #[tokio::main]
+// #[node_bindgen]
+// async fn warp_handle() -> u8 {
+//     error!("Calling warp!");
+//     warn!("warn");
+//     info!("yo info");
+
+//     // YOU MUST initCoin first!!!
+//     let res = async {
+//         let result = crate::api::sync::coin_sync(
+//             // zec, use transparent, 0 offset, filter max_cost>20
+//             0,
+//             true,
+//             0,
+//             20,
+//             move |_height| {
+//                 //
+//             },
+//             &SYNC_CANCELED,
+//         )
+//         .await;
+
+//         // what's this about?
+//         // need an active account to run this one?
+//         // crate::api::mempool::scan().await?;
+
+//         match result {
+//             Ok(_) => Ok(0),
+//             Err(err) => {
+//                 if let Some(e) = err.downcast_ref::<ChainError>() {
+//                     match e {
+//                         ChainError::Reorg => Ok(1),
+//                         ChainError::Busy => Ok(2),
+//                     }
+//                 } else {
+//                     log::error!("Non-chain error: {}", err);
+//                     // 11111111
+//                     Ok(0xFF)
+//                 }
+//             }
+//         }
+//     };
+//     let r = res.await;
+//     // *SYNC_CANCELED.store(false, Ordering::Release);
+//     log_result(r)
+// }
 
 // This would only be relevant if we could use the same process?
 // But, I think we will just tell the main process to kill the warp,
@@ -270,7 +211,6 @@ async fn warp_handle() -> u8 {
 //     SYNC_CANCELED.store(true, Ordering::Release);
 // }
 
-
 // TODO: this is still not async ...
 // I think we have to go to a lower level with scan::sync_async
 // But, that's at a lower level. Maybe later.
@@ -279,13 +219,13 @@ async fn warp_handle() -> u8 {
 // result is still undefined lol
 // > p = warp.prometo(0)
 // undefined
-#[tokio::main]
-#[node_bindgen]
-async fn prometo(offset: u32) -> Result<(), NjError> {
-    crate::api::sync::coin_sync(
-        0, true, offset, 20, move |_height| {}, &SYNC_CANCELED
-    ).await.map_err(|e| NjError::Other(format!("{}", e)))
-}
+// #[tokio::main]
+// #[node_bindgen]
+// async fn prometo(offset: u32) -> Result<(), NjError> {
+//     crate::api::sync::coin_sync(
+//         0, true, offset, 20, move |_height| {}, &SYNC_CANCELED
+//     ).await.map_err(|e| NjError::Other(format!("{}", e)))
+// }
 
 // struct TestObject {
 //     val: Option<f64>,
@@ -297,7 +237,6 @@ async fn prometo(offset: u32) -> Result<(), NjError> {
 //     fn new() -> Self {
 //         Self { val: None }
 //     }
-
 
 #[tokio::main]
 #[node_bindgen]
@@ -319,7 +258,7 @@ async fn send_multi_payment(
             height,
             &recipients,
             false, // use_transparent,
-            0,  // anchor offset
+            0,     // anchor offset
             Box::new(move |_progress| {
                 // report_progress(progress, port);
             }),
@@ -329,8 +268,6 @@ async fn send_multi_payment(
     };
     log_string(res.await)
 }
-
-
 
 #[node_bindgen]
 fn get_lwd_url(coin: u32) -> String {
@@ -352,11 +289,7 @@ fn is_valid_address(coin: u32, address: String) -> bool {
 }
 
 #[node_bindgen]
-fn make_payment_uri(
-    address: String,
-    amount: u32,
-    memo: String,
-) -> String {
+fn make_payment_uri(address: String, amount: u32, memo: String) -> String {
     let amount = amount as u64;
     let res = crate::api::payment_uri::make_payment_uri(&address, amount, &memo);
     log_string(res)

@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use std::str::FromStr;
 
 use secp256k1::SecretKey;
@@ -12,7 +13,7 @@ use zcash_client_backend::encoding::{
 use zcash_primitives::consensus::Parameters;
 use zcash_primitives::transaction::builder::Progress;
 
-use crate::db::ZMessage;
+use crate::db::{AccountData, ZMessage};
 use crate::taddr::get_utxos;
 use serde::Deserialize;
 use zcash_primitives::memo::Memo;
@@ -29,7 +30,7 @@ async fn prepare_multi_payment(
     let c = CoinConfig::get_active();
     let mut tx_builder = TxBuilder::new(c.coin_type, last_height);
 
-    let fvk = c.db()?.get_ivk(c.id_account)?;
+    let AccountData { fvk, .. } = c.db()?.get_account_info(c.id_account)?;
     let fvk = decode_extended_full_viewing_key(
         c.chain.network().hrp_sapling_extended_full_viewing_key(),
         &fvk,
@@ -62,7 +63,8 @@ fn sign(tx: &Tx, progress_callback: PaymentProgressCallback) -> anyhow::Result<V
     let c = CoinConfig::get_active();
     let prover = get_prover();
     let db = c.db()?;
-    let zsk = db.get_sk(c.id_account)?;
+    let AccountData { sk: zsk, .. } = db.get_account_info(c.id_account)?;
+    let zsk = zsk.ok_or(anyhow!("Cannot sign without secret key"))?;
     let tsk = db
         .get_tsk(c.id_account)?
         .map(|tsk| SecretKey::from_str(&tsk).unwrap());
@@ -111,6 +113,8 @@ pub async fn build_sign_send_multi_payment(
     let tx_id = broadcast_tx(&raw_tx).await?;
 
     c.db()?.tx_mark_spend(&note_ids)?;
+    let mut mempool = c.mempool.lock().unwrap();
+    mempool.clear()?;
     Ok(tx_id)
 }
 
@@ -122,7 +126,7 @@ pub async fn shield_taddr() -> anyhow::Result<String> {
 
 pub fn parse_recipients(recipients: &str) -> anyhow::Result<Vec<RecipientMemo>> {
     let c = CoinConfig::get_active();
-    let address = c.db()?.get_address(c.id_account)?;
+    let AccountData { address, .. } = c.db()?.get_account_info(c.id_account)?;
     let recipients: Vec<Recipient> = serde_json::from_str(recipients)?;
     let recipient_memos: Vec<_> = recipients
         .iter()
@@ -137,10 +141,17 @@ pub fn encode_memo(from: &str, include_from: bool, subject: &str, body: &str) ->
     msg
 }
 
-pub fn decode_memo(memo: &str, recipient: &str, timestamp: u32, height: u32) -> ZMessage {
+pub fn decode_memo(
+    id_tx: u32,
+    memo: &str,
+    recipient: &str,
+    timestamp: u32,
+    height: u32,
+) -> ZMessage {
     let memo_lines: Vec<_> = memo.splitn(4, '\n').collect();
     let msg = if memo_lines[0] == "\u{1F6E1}MSG" {
         ZMessage {
+            id_tx,
             sender: if memo_lines[1].is_empty() {
                 None
             } else {
@@ -154,6 +165,7 @@ pub fn decode_memo(memo: &str, recipient: &str, timestamp: u32, height: u32) -> 
         }
     } else {
         ZMessage {
+            id_tx,
             sender: None,
             recipient: recipient.to_string(),
             subject: memo_lines[0].chars().take(20).collect(),

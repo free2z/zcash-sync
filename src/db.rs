@@ -4,8 +4,10 @@ use crate::prices::Quote;
 use crate::taddr::{derive_tkeys, TBalance};
 use crate::transaction::TransactionInfo;
 use crate::{CTree, Witness};
+use rusqlite::Error::QueryReturnedNoRows;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use std::collections::HashMap;
 use zcash_client_backend::encoding::decode_extended_full_viewing_key;
 use zcash_params::coin::{get_coin_chain, get_coin_id, CoinType};
@@ -22,6 +24,7 @@ pub const DEFAULT_DB_PATH: &str = "zec.db";
 pub struct DbAdapter {
     pub coin_type: CoinType,
     pub connection: Connection,
+    pub db_path: String,
 }
 
 pub struct ReceivedNote {
@@ -72,6 +75,13 @@ pub struct AccountBackup {
     pub t_addr: Option<String>,
 }
 
+pub fn wrap_query_no_rows(name: &'static str) -> impl Fn(rusqlite::Error) -> anyhow::Error {
+    move |err: rusqlite::Error| match err {
+        QueryReturnedNoRows => anyhow::anyhow!("Query {} returned no rows", name),
+        other => anyhow::anyhow!(other.to_string()),
+    }
+}
+
 impl DbAdapter {
     pub fn new(coin_type: CoinType, db_path: &str) -> anyhow::Result<DbAdapter> {
         let connection = Connection::open(db_path)?;
@@ -80,7 +90,14 @@ impl DbAdapter {
         Ok(DbAdapter {
             coin_type,
             connection,
+            db_path: db_path.to_owned(),
         })
+    }
+
+    pub fn disable_wal(db_path: &str) -> anyhow::Result<()> {
+        let connection = Connection::open(db_path)?;
+        connection.query_row("PRAGMA journal_mode = OFF", [], |_| Ok(()))?;
+        Ok(())
     }
 
     pub fn begin_transaction(&mut self) -> anyhow::Result<Transaction> {
@@ -93,8 +110,9 @@ impl DbAdapter {
     //     Ok(())
     // }
     //
-    pub fn init_db(&self) -> anyhow::Result<()> {
+    pub fn init_db(&mut self) -> anyhow::Result<()> {
         migration::init_db(&self.connection)?;
+        self.delete_incomplete_scan()?;
         Ok(())
     }
 
@@ -121,11 +139,14 @@ impl DbAdapter {
             ON CONFLICT DO NOTHING",
             params![name, seed, index, sk, ivk, address],
         )?;
-        let id_account: u32 = self.connection.query_row(
-            "SELECT id_account FROM accounts WHERE ivk = ?1",
-            params![ivk],
-            |row| row.get(0),
-        )?;
+        let id_account: u32 = self
+            .connection
+            .query_row(
+                "SELECT id_account FROM accounts WHERE ivk = ?1",
+                params![ivk],
+                |row| row.get(0),
+            )
+            .map_err(wrap_query_no_rows("store_account/id_account"))?;
         Ok((id_account, exists))
     }
 
@@ -186,29 +207,41 @@ impl DbAdapter {
         Ok(fvks)
     }
 
-    pub fn trim_to_height(&mut self, height: u32) -> anyhow::Result<()> {
+    pub fn trim_to_height(&mut self, height: u32) -> anyhow::Result<u32> {
+        // snap height to an existing checkpoint
+        let height = self.connection.query_row(
+            "SELECT MAX(height) from blocks WHERE height <= ?1",
+            params![height],
+            |row| {
+                let height: Option<u32> = row.get(0)?;
+                Ok(height)
+            },
+        )?;
+        let height = height.unwrap_or(0);
+        log::info!("Rewind to height: {}", height);
+
         let tx = self.connection.transaction()?;
-        tx.execute("DELETE FROM blocks WHERE height >= ?1", params![height])?;
+        tx.execute("DELETE FROM blocks WHERE height > ?1", params![height])?;
         tx.execute(
-            "DELETE FROM sapling_witnesses WHERE height >= ?1",
+            "DELETE FROM sapling_witnesses WHERE height > ?1",
             params![height],
         )?;
         tx.execute(
-            "DELETE FROM received_notes WHERE height >= ?1",
+            "DELETE FROM received_notes WHERE height > ?1",
             params![height],
         )?;
         tx.execute(
-            "UPDATE received_notes SET spent = NULL WHERE spent >= ?1",
+            "UPDATE received_notes SET spent = NULL WHERE spent > ?1",
             params![height],
         )?;
         tx.execute(
-            "DELETE FROM transactions WHERE height >= ?1",
+            "DELETE FROM transactions WHERE height > ?1",
             params![height],
         )?;
-        tx.execute("DELETE FROM messages WHERE height >= ?1", params![height])?;
+        tx.execute("DELETE FROM messages WHERE height > ?1", params![height])?;
         tx.commit()?;
 
-        Ok(())
+        Ok(height)
     }
 
     pub fn get_txhash(&self, id_tx: u32) -> anyhow::Result<(u32, u32, u32, Vec<u8>, String)> {
@@ -223,7 +256,7 @@ impl DbAdapter {
                 let ivk: String = row.get(4)?;
                 Ok((account, height, timestamp, tx_hash, ivk))
             },
-        )?;
+        ).map_err(wrap_query_no_rows("get_txhash"))?;
         Ok((account, height, timestamp, tx_hash, ivk))
     }
 
@@ -262,11 +295,13 @@ impl DbAdapter {
         ON CONFLICT DO NOTHING",
             params![account, txid, height, timestamp, tx_index],
         )?;
-        let id_tx: u32 = db_tx.query_row(
-            "SELECT id_tx FROM transactions WHERE account = ?1 AND txid = ?2",
-            params![account, txid],
-            |row| row.get(0),
-        )?;
+        let id_tx: u32 = db_tx
+            .query_row(
+                "SELECT id_tx FROM transactions WHERE account = ?1 AND txid = ?2",
+                params![account, txid],
+                |row| row.get(0),
+            )
+            .map_err(wrap_query_no_rows("store_transaction/id_tx"))?;
         log::debug!("-transaction {}", id_tx);
         Ok(id_tx)
     }
@@ -281,11 +316,13 @@ impl DbAdapter {
         db_tx.execute("INSERT INTO received_notes(account, tx, height, position, output_index, diversifier, value, rcm, nf, spent)
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
         ON CONFLICT DO NOTHING", params![note.account, id_tx, note.height, position as u32, note.output_index, note.diversifier, note.value as i64, note.rcm, note.nf, note.spent])?;
-        let id_note: u32 = db_tx.query_row(
-            "SELECT id_note FROM received_notes WHERE tx = ?1 AND output_index = ?2",
-            params![id_tx, note.output_index],
-            |row| row.get(0),
-        )?;
+        let id_note: u32 = db_tx
+            .query_row(
+                "SELECT id_note FROM received_notes WHERE tx = ?1 AND output_index = ?2",
+                params![id_tx, note.output_index],
+                |row| row.get(0),
+            )
+            .map_err(wrap_query_no_rows("store_received_note/id_note"))?;
         log::debug!("-received_note");
         Ok(id_note)
     }
@@ -325,15 +362,17 @@ impl DbAdapter {
     }
 
     pub fn get_received_note_value(nf: &Nf, db_tx: &Transaction) -> anyhow::Result<(u32, i64)> {
-        let (account, value) = db_tx.query_row(
-            "SELECT account, value FROM received_notes WHERE nf = ?1",
-            params![nf.0.to_vec()],
-            |row| {
-                let account: u32 = row.get(0)?;
-                let value: i64 = row.get(1)?;
-                Ok((account, value))
-            },
-        )?;
+        let (account, value) = db_tx
+            .query_row(
+                "SELECT account, value FROM received_notes WHERE nf = ?1",
+                params![nf.0.to_vec()],
+                |row| {
+                    let account: u32 = row.get(0)?;
+                    let value: i64 = row.get(1)?;
+                    Ok((account, value))
+                },
+            )
+            .map_err(wrap_query_no_rows("get_received_note_value"))?;
         Ok((account, value))
     }
 
@@ -347,9 +386,10 @@ impl DbAdapter {
     }
 
     pub fn get_last_sync_height(&self) -> anyhow::Result<Option<u32>> {
-        let height: Option<u32> =
-            self.connection
-                .query_row("SELECT MAX(height) FROM blocks", [], |row| row.get(0))?;
+        let height: Option<u32> = self
+            .connection
+            .query_row("SELECT MAX(height) FROM blocks", [], |row| row.get(0))
+            .map_err(wrap_query_no_rows(""))?;
         Ok(height)
     }
 
@@ -436,7 +476,7 @@ impl DbAdapter {
     ) -> anyhow::Result<HashMap<Vec<u8>, u64>> {
         let mut sql = "SELECT value, nf FROM received_notes WHERE account = ?1".to_string();
         if unspent_only {
-            sql += "AND (spent IS NULL OR spent = 0)";
+            sql += " AND (spent IS NULL OR spent = 0)";
         }
         let mut statement = self.connection.prepare(&sql)?;
         let nfs_res = statement.query_map(params![account], |row| {
@@ -534,10 +574,10 @@ impl DbAdapter {
         Ok(())
     }
 
-    pub fn purge_old_witnesses(&self, height: u32) -> anyhow::Result<()> {
-        log::debug!("+purge_old_witnesses");
+    pub fn purge_old_witnesses(&mut self, height: u32) -> anyhow::Result<()> {
+        log::info!("purge_old_witnesses - {}", height);
         let min_height: Option<u32> = self.connection.query_row(
-            "SELECT MAX(height) FROM sapling_witnesses WHERE height <= ?1",
+            "SELECT MAX(height) FROM blocks WHERE height <= ?1",
             params![height],
             |row| row.get(0),
         )?;
@@ -545,12 +585,13 @@ impl DbAdapter {
         // Leave at least one sapling witness
         if let Some(min_height) = min_height {
             log::debug!("Purging witnesses older than {}", min_height);
-            self.connection.execute(
+            let transaction = self.connection.transaction()?;
+            transaction.execute(
                 "DELETE FROM sapling_witnesses WHERE height < ?1",
                 params![min_height],
             )?;
-            self.connection
-                .execute("DELETE FROM blocks WHERE height < ?1", params![min_height])?;
+            transaction.execute("DELETE FROM blocks WHERE height < ?1", params![min_height])?;
+            transaction.commit()?;
         }
         log::debug!("-purge_old_witnesses");
         Ok(())
@@ -593,82 +634,6 @@ impl DbAdapter {
         Ok(contacts)
     }
 
-    pub fn get_backup(
-        &self,
-        account: u32,
-    ) -> anyhow::Result<(Option<String>, Option<String>, String)> {
-        log::debug!("+get_backup");
-        let (seed, sk, ivk) = self.connection.query_row(
-            "SELECT seed, sk, ivk FROM accounts WHERE id_account = ?1",
-            params![account],
-            |row| {
-                let seed: Option<String> = row.get(0)?;
-                let sk: Option<String> = row.get(1)?;
-                let ivk: String = row.get(2)?;
-                Ok((seed, sk, ivk))
-            },
-        )?;
-        log::debug!("-get_backup");
-        Ok((seed, sk, ivk))
-    }
-
-    pub fn get_seed(&self, account: u32) -> anyhow::Result<(Option<String>, u32)> {
-        log::info!("+get_seed");
-        let (seed, index) = self.connection.query_row(
-            "SELECT seed, aindex FROM accounts WHERE id_account = ?1",
-            params![account],
-            |row| {
-                let sk: Option<String> = row.get(0)?;
-                let index: u32 = row.get(1)?;
-                Ok((sk, index))
-            },
-        )?;
-        log::info!("-get_seed");
-        Ok((seed, index))
-    }
-
-    pub fn get_sk(&self, account: u32) -> anyhow::Result<String> {
-        log::info!("+get_sk");
-        let sk = self.connection.query_row(
-            "SELECT sk FROM accounts WHERE id_account = ?1",
-            params![account],
-            |row| {
-                let sk: String = row.get(0)?;
-                Ok(sk)
-            },
-        )?;
-        log::info!("-get_sk");
-        Ok(sk)
-    }
-
-    pub fn get_ivk(&self, account: u32) -> anyhow::Result<String> {
-        log::debug!("+get_ivk");
-        let ivk = self.connection.query_row(
-            "SELECT ivk FROM accounts WHERE id_account = ?1",
-            params![account],
-            |row| {
-                let ivk: String = row.get(0)?;
-                Ok(ivk)
-            },
-        )?;
-        log::debug!("-get_ivk");
-        Ok(ivk)
-    }
-
-    pub fn get_address(&self, account: u32) -> anyhow::Result<String> {
-        log::debug!("+get_address");
-        let address = self.connection.query_row(
-            "SELECT address FROM accounts WHERE id_account = ?1",
-            params![account],
-            |row| {
-                let address: String = row.get(0)?;
-                Ok(address)
-            },
-        )?;
-        log::debug!("-get_address");
-        Ok(address)
-    }
-
     pub fn get_diversifier(&self, account: u32) -> anyhow::Result<DiversifierIndex> {
         let diversifier_index = self
             .connection
@@ -685,6 +650,33 @@ impl DbAdapter {
             .optional()?
             .unwrap_or([0u8; 11]);
         Ok(DiversifierIndex(diversifier_index))
+    }
+
+    pub fn get_account_info(&self, account: u32) -> anyhow::Result<AccountData> {
+        let account_data = self
+            .connection
+            .query_row(
+                "SELECT name, seed, sk, ivk, address, aindex FROM accounts WHERE id_account = ?1",
+                params![account],
+                |row| {
+                    let name: String = row.get(0)?;
+                    let seed: Option<String> = row.get(1)?;
+                    let sk: Option<String> = row.get(2)?;
+                    let fvk: String = row.get(3)?;
+                    let address: String = row.get(4)?;
+                    let aindex: u32 = row.get(5)?;
+                    Ok(AccountData {
+                        name,
+                        seed,
+                        sk,
+                        fvk,
+                        address,
+                        aindex,
+                    })
+                },
+            )
+            .map_err(wrap_query_no_rows("get_account_info"))?;
+        Ok(account_data)
     }
 
     pub fn store_diversifier(
@@ -732,9 +724,9 @@ impl DbAdapter {
     }
 
     pub fn create_taddr(&self, account: u32) -> anyhow::Result<()> {
-        let (seed, index) = self.get_seed(account)?;
+        let AccountData { seed, aindex, .. } = self.get_account_info(account)?;
         if let Some(seed) = seed {
-            let bip44_path = format!("m/44'/{}'/0'/0/{}", self.network().coin_type(), index);
+            let bip44_path = format!("m/44'/{}'/0'/0/{}", self.network().coin_type(), aindex);
             let (sk, address) = derive_tkeys(self.network(), &seed, &bip44_path)?;
             self.connection.execute(
                 "INSERT INTO taddrs(account, sk, address) VALUES (?1, ?2, ?3) \
@@ -807,6 +799,12 @@ impl DbAdapter {
     }
 
     pub fn truncate_data(&self) -> anyhow::Result<()> {
+        self.truncate_sync_data()?;
+        self.connection.execute("DELETE FROM diversifiers", [])?;
+        Ok(())
+    }
+
+    pub fn truncate_sync_data(&self) -> anyhow::Result<()> {
         self.connection.execute("DELETE FROM blocks", [])?;
         self.connection.execute("DELETE FROM contacts", [])?;
         self.connection.execute("DELETE FROM diversifiers", [])?;
@@ -817,6 +815,14 @@ impl DbAdapter {
             .execute("DELETE FROM sapling_witnesses", [])?;
         self.connection.execute("DELETE FROM transactions", [])?;
         self.connection.execute("DELETE FROM messages", [])?;
+        Ok(())
+    }
+
+    pub fn delete_incomplete_scan(&mut self) -> anyhow::Result<()> {
+        let synced_height = self.get_last_sync_height()?;
+        if let Some(synced_height) = synced_height {
+            self.trim_to_height(synced_height)?;
+        }
         Ok(())
     }
 
@@ -841,19 +847,10 @@ impl DbAdapter {
             .execute("DELETE FROM taddrs WHERE account = ?1", params![account])?;
         self.connection
             .execute("DELETE FROM messages WHERE account = ?1", params![account])?;
-        self.connection.execute(
-            "DELETE FROM secret_shares WHERE account = ?1",
-            params![account],
-        )?;
         Ok(())
     }
 
-    pub fn get_full_backup(&self) -> anyhow::Result<Vec<AccountBackup>> {
-        let _ = self.connection.execute(
-            "ALTER TABLE accounts ADD COLUMN aindex INT NOT NULL DEFAULT 0",
-            [],
-        ); // ignore error
-
+    pub fn get_full_backup(&self, coin: u8) -> anyhow::Result<Vec<AccountBackup>> {
         let mut statement = self.connection.prepare(
             "SELECT name, seed, aindex, a.sk AS z_sk, ivk, a.address AS z_addr, t.sk as t_sk, t.address AS t_addr FROM accounts a LEFT JOIN taddrs t ON a.id_account = t.account")?;
         let rows = statement.query_map([], |r| {
@@ -865,7 +862,6 @@ impl DbAdapter {
             let z_addr: String = r.get(5)?;
             let t_sk: Option<String> = r.get(6)?;
             let t_addr: Option<String> = r.get(7)?;
-            let coin = get_coin_id_by_address(&z_addr);
             Ok(AccountBackup {
                 coin,
                 name,
@@ -912,8 +908,8 @@ impl DbAdapter {
     }
 
     pub fn store_message(&self, account: u32, message: &ZMessage) -> anyhow::Result<()> {
-        self.connection.execute("INSERT INTO messages(account, sender, recipient, subject, body, timestamp, height, read) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-                                params![account, message.sender, message.recipient, message.subject, message.body, message.timestamp, message.height, false])?;
+        self.connection.execute("INSERT INTO messages(account, id_tx, sender, recipient, subject, body, timestamp, height, read) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                                params![account, message.id_tx, message.sender, message.recipient, message.subject, message.body, message.timestamp, message.height, false])?;
         Ok(())
     }
 
@@ -999,21 +995,73 @@ impl DbAdapter {
         Ok(txs)
     }
 
+    pub fn import_from_syncdata(&mut self, account_info: &AccountInfo) -> anyhow::Result<Vec<u32>> {
+        // get id_account from fvk
+        // truncate received_notes, sapling_witnesses for account
+        // add new received_notes, sapling_witnesses
+        // add block
+        let id_account = self
+            .connection
+            .query_row(
+                "SELECT id_account FROM accounts WHERE ivk = ?1",
+                params![&account_info.fvk],
+                |row| {
+                    let id_account: u32 = row.get(0)?;
+                    Ok(id_account)
+                },
+            )
+            .map_err(wrap_query_no_rows("import_from_syncdata/id_account"))?;
+        self.connection.execute(
+            "DELETE FROM received_notes WHERE account = ?1",
+            params![id_account],
+        )?;
+        self.connection.execute(
+            "DELETE FROM transactions WHERE account = ?1",
+            params![id_account],
+        )?;
+        self.connection.execute(
+            "DELETE FROM messages WHERE account = ?1",
+            params![id_account],
+        )?;
+        let mut ids = vec![];
+        for tx in account_info.txs.iter() {
+            let mut tx_hash = hex::decode(&tx.hash)?;
+            tx_hash.reverse();
+            self.connection.execute("INSERT INTO transactions(account,txid,height,timestamp,value,address,memo,tx_index) VALUES (?1,?2,?3,?4,?5,'','',?6)",
+                                    params![id_account, &tx_hash, tx.height, tx.timestamp, tx.value, tx.index])?;
+            let id_tx = self.connection.last_insert_rowid() as u32;
+            ids.push(id_tx);
+            for n in tx.notes.iter() {
+                let spent = if n.spent == 0 { None } else { Some(n.spent) };
+                self.connection.execute("INSERT INTO received_notes(account,position,tx,height,output_index,diversifier,value,rcm,nf,spent,excluded) \
+                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                                        params![id_account, n.position as i64, id_tx, n.height, n.output_index, hex::decode(&n.diversifier)?, n.value as i64,
+                                            hex::decode(&n.rcm)?, &n.nf, spent, false])?;
+                let id_note = self.connection.last_insert_rowid() as u32;
+                self.connection.execute(
+                    "INSERT INTO sapling_witnesses(note,height,witness) VALUES (?1,?2,?3) ON CONFLICT DO NOTHING",
+                    params![
+                        id_note,
+                        account_info.height,
+                        hex::decode(&n.witness).unwrap()
+                    ],
+                )?;
+            }
+        }
+        self.connection.execute("INSERT INTO blocks(height,hash,timestamp,sapling_tree) VALUES (?1,?2,?3,?4) ON CONFLICT(height) DO NOTHING",
+                                params![account_info.height, hex::decode(&account_info.hash)?, account_info.timestamp, hex::decode(&account_info.sapling_tree)?])?;
+        self.trim_to_height(account_info.height)?;
+        Ok(ids)
+    }
+
     fn network(&self) -> &'static Network {
         let chain = get_coin_chain(self.coin_type);
         chain.network()
     }
 }
 
-fn get_coin_id_by_address(address: &str) -> u8 {
-    if address.starts_with("ys") {
-        1
-    } else {
-        0
-    }
-}
-
 pub struct ZMessage {
+    pub id_tx: u32,
     pub sender: Option<String>,
     pub recipient: String,
     pub subject: String,
@@ -1043,6 +1091,58 @@ pub struct AccountRec {
     id_account: u32,
     name: String,
     address: String,
+}
+
+#[serde_as]
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct PlainNote {
+    pub height: u32,
+    pub value: u64,
+    #[serde_as(as = "serde_with::hex::Hex")]
+    pub nf: Vec<u8>,
+    pub position: u64,
+    pub tx_index: u32,
+    pub output_index: u32,
+    pub spent: u32,
+    pub witness: String,
+    pub rcm: String,
+    pub diversifier: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TxInfo {
+    pub height: u32,
+    pub timestamp: u32,
+    pub index: i64,
+    pub hash: String,
+    pub value: i64,
+    pub notes: Vec<PlainNote>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct OutputInfo {
+    pub tx_index: u32,
+    pub index: u32,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct AccountInfo {
+    pub fvk: String,
+    pub height: u32,
+    pub balance: u64,
+    pub txs: Vec<TxInfo>,
+    pub hash: String,
+    pub timestamp: u32,
+    pub sapling_tree: String,
+}
+
+pub struct AccountData {
+    pub name: String,
+    pub seed: Option<String>,
+    pub sk: Option<String>,
+    pub fvk: String,
+    pub address: String,
+    pub aindex: u32,
 }
 
 #[cfg(test)]

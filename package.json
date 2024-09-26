@@ -1,0 +1,25 @@
+{
+  "name": "zcash-sync",
+  "version": "0.1.0",
+  "description": "Warp sync and wallet in node",
+  "main": "warp.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/free2z/zuu.git"
+  },
+  "author": "2Z Inc.",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/free2z/zuu/issues"
+  },
+  "homepage": "https://github.com/free2z/zuu#readme",
+  "dependencies": {
+    "sqlite3": "^5.0.10"
+  }
+}

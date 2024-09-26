@@ -109,6 +109,8 @@ pub struct BlockRange {
     pub start: ::core::option::Option<BlockId>,
     #[prost(message, optional, tag="2")]
     pub end: ::core::option::Option<BlockId>,
+    #[prost(uint64, tag="3")]
+    pub spam_filter_threshold: u64,
 }
 /// A TxFilter contains the information needed to identify a particular
 /// transaction: either a block and an index, or a direct transaction hash.
@@ -408,9 +410,9 @@ pub mod compact_tx_streamer_client {
             &mut self,
             request: impl tonic::IntoRequest<super::BlockRange>,
         ) -> Result<
-                tonic::Response<tonic::codec::Streaming<super::CompactBlock>>,
-                tonic::Status,
-            > {
+            tonic::Response<tonic::codec::Streaming<super::CompactBlock>>,
+            tonic::Status,
+        > {
             self.inner
                 .ready()
                 .await
@@ -471,9 +473,9 @@ pub mod compact_tx_streamer_client {
             &mut self,
             request: impl tonic::IntoRequest<super::TransparentAddressBlockFilter>,
         ) -> Result<
-                tonic::Response<tonic::codec::Streaming<super::RawTransaction>>,
-                tonic::Status,
-            > {
+            tonic::Response<tonic::codec::Streaming<super::RawTransaction>>,
+            tonic::Status,
+        > {
             self.inner
                 .ready()
                 .await
@@ -542,9 +544,9 @@ pub mod compact_tx_streamer_client {
             &mut self,
             request: impl tonic::IntoRequest<super::Exclude>,
         ) -> Result<
-                tonic::Response<tonic::codec::Streaming<super::CompactTx>>,
-                tonic::Status,
-            > {
+            tonic::Response<tonic::codec::Streaming<super::CompactTx>>,
+            tonic::Status,
+        > {
             self.inner
                 .ready()
                 .await
@@ -566,9 +568,9 @@ pub mod compact_tx_streamer_client {
             &mut self,
             request: impl tonic::IntoRequest<super::Empty>,
         ) -> Result<
-                tonic::Response<tonic::codec::Streaming<super::RawTransaction>>,
-                tonic::Status,
-            > {
+            tonic::Response<tonic::codec::Streaming<super::RawTransaction>>,
+            tonic::Status,
+        > {
             self.inner
                 .ready()
                 .await
@@ -630,9 +632,9 @@ pub mod compact_tx_streamer_client {
             &mut self,
             request: impl tonic::IntoRequest<super::GetAddressUtxosArg>,
         ) -> Result<
-                tonic::Response<tonic::codec::Streaming<super::GetAddressUtxosReply>>,
-                tonic::Status,
-            > {
+            tonic::Response<tonic::codec::Streaming<super::GetAddressUtxosReply>>,
+            tonic::Status,
+        > {
             self.inner
                 .ready()
                 .await

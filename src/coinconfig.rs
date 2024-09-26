@@ -10,9 +10,10 @@ use zcash_params::{OUTPUT_PARAMS, SPEND_PARAMS};
 use zcash_proofs::prover::LocalTxProver;
 
 lazy_static! {
-    pub static ref COIN_CONFIG: [Mutex<CoinConfig>; 2] = [
+    pub static ref COIN_CONFIG: [Mutex<CoinConfig>; 3] = [
         Mutex::new(CoinConfig::new(0, CoinType::Zcash)),
         Mutex::new(CoinConfig::new(1, CoinType::Ycash)),
+        Mutex::new(CoinConfig::new(2, CoinType::PirateChain)),
     ];
     pub static ref PROVER: AtomicLazyCell<LocalTxProver> = AtomicLazyCell::new();
     pub static ref RAPTORQ: Mutex<FountainCodes> = Mutex::new(FountainCodes::new());
@@ -81,7 +82,7 @@ impl CoinConfig {
 
     pub fn set_db_path(&mut self, db_path: &str) -> anyhow::Result<()> {
         self.db_path = Some(db_path.to_string());
-        let db = DbAdapter::new(self.coin_type, db_path)?;
+        let mut db = DbAdapter::new(self.coin_type, db_path)?;
         db.init_db()?;
         self.db = Some(Arc::new(Mutex::new(db)));
         Ok(())
